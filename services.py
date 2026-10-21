@@ -1,9 +1,84 @@
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import SQLAlchemyError
-from models import TrainingSession, ScheduleEvent, ScheduleEvent, Goal, Household, HouseholdMember, User, WeightRecord
-from schemas import  TrainingSessionCreate, ScheduleEventCreate, GoalCreate, UserCreate, WeightRecordCreate
-from sqlalchemy import select, case
-from datetime import datetime, date
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
+from models import MealEntry, Workout, TrainingSession, ScheduleEvent, ScheduleEvent, Goal, Household, HouseholdMember, User, WeightRecord
+from schemas import  LoginRequest, RegisterRequest, MealEntryCreate, WorkoutUpdate, WorkoutCreate, TrainingSessionCreate, ScheduleEventCreate, GoalCreate, UserCreate, WeightRecordCreate
+from sqlalchemy import select, case, func
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
+from security import hash_password, verify_password
+
+
+
+
+class HouseholdNotFoundError(Exception):
+    pass
+
+
+class UserNotFoundError(Exception):
+    pass
+
+
+class HouseholdMemberAlreadyExistsError(Exception):
+    pass
+
+
+class GoalNotFoundError(Exception):
+    pass
+
+
+class InvalidGoalDatesError(Exception):
+    pass
+
+
+class ScheduleEventNotFoundError(Exception):
+    pass
+
+
+class ScheduleEventAlreadyLinkedError(Exception):
+    pass
+
+
+class WorkoutSessionNotFoundError(Exception):
+    # Указанная сессия не найдена у этого пользователя
+    pass
+
+
+class WorkoutTimeOutsideSessionError(Exception):
+    # Время блока выходит за пределы сессии
+    pass
+
+
+class WorkoutSaveError(Exception):
+    # Не получилось сохранить блок в базе данных
+    pass
+
+
+class WorkoutNotFoundError(Exception):
+    # Блок не найден в указанной сессии
+    pass
+
+
+class MealEntryUserNotFoundError(Exception):
+    # Пользователь, для которого создаётся запись, не найден
+    pass
+
+
+class MealEntrySaveError(Exception):
+    # Ошибка при сохранении записи о приёме пищи
+    pass
+
+
+class EmailAlreadyRegisteredError(Exception):
+    """Ошибка: пользователь с таким email уже зарегистрирован."""
+    pass
+
+
+class InvalidCredentialsError(Exception):
+    """Ошибка: неверные учётные данные."""
+    pass
+
+
+
 
 
 def create_user(db: Session, user_data: UserCreate) -> User:
@@ -26,6 +101,78 @@ def create_user(db: Session, user_data: UserCreate) -> User:
         raise
 
     return db_user
+
+
+
+def register_user(db, registration_data: RegisterRequest):
+    """Создаёт пользователя и сохраняет только хеш его пароля."""
+
+    # Приводим email к единому регистру.
+    email = str(registration_data.email).strip().lower()
+
+    # Проверяем, не зарегистрирован ли такой email.
+    existing_user = (
+        db.query(User)
+        .filter(User.email == email)
+        .first()
+    )
+
+    if existing_user is not None:
+        raise EmailAlreadyRegisteredError
+
+    # Отделяем пароль от остальных регистрационных данных.
+    user_data = registration_data.model_dump()
+    password = user_data.pop("password")
+    user_data.pop("email")
+
+    # Создаём пользователя, сохраняя вместо пароля его хеш.
+    new_user = User(
+        **user_data,
+        email=email,
+        password_hash=hash_password(password),
+    )
+
+
+
+    try:
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+    except IntegrityError:
+        # Откатываем транзакцию, если база отклонила запись.
+        db.rollback()
+        raise EmailAlreadyRegisteredError from None
+
+    return new_user
+
+
+
+
+def authenticate_user(db, login_data: LoginRequest):
+    """Находит пользователя и проверяет введённый пароль."""
+
+    # Email приводим к тому же регистру, что и при регистрации.
+    email = str(login_data.email).strip().lower()
+
+    user = (
+        db.query(User)
+        .filter(User.email == email)
+        .first()
+    )
+
+    # Одинаковая ошибка для неизвестного email и неверного пароля.
+    if user is None or user.password_hash is None:
+        raise InvalidCredentialsError
+
+    if not verify_password(login_data.password, user.password_hash):
+        raise InvalidCredentialsError
+
+    return user
+
+
+
+
+
 
 
 def get_user(db: Session, user_id: int) -> User | None:
@@ -69,32 +216,7 @@ def create_household(
     return household
 
 
-class HouseholdNotFoundError(Exception):
-    pass
 
-
-class UserNotFoundError(Exception):
-    pass
-
-
-class HouseholdMemberAlreadyExistsError(Exception):
-    pass
-
-
-class GoalNotFoundError(Exception):
-    pass
-
-
-class InvalidGoalDatesError(Exception):
-    pass
-
-
-class ScheduleEventNotFoundError(Exception):
-    pass
-
-
-class ScheduleEventAlreadyLinkedError(Exception):
-    pass
 
 
 def add_household_member(
@@ -106,6 +228,7 @@ def add_household_member(
 
     if household is None:
         raise HouseholdNotFoundError()
+
 
     user = db.get(User, user_id)
 
@@ -495,3 +618,252 @@ def get_training_sessions(
     )
 
     return list(db.scalars(statement).all())
+
+
+def create_workout(
+    db: Session,
+    user_id: int,
+    training_session_id: int,
+    workout_data: WorkoutCreate,
+) -> Workout:
+    # Находим сессию, принадлежащую указанному пользователю
+    training_session = db.scalar(
+        select(TrainingSession).where(
+            TrainingSession.id == training_session_id,
+            TrainingSession.user_id == user_id,
+        )
+    )
+
+    # Не позволяем работать с чужой или несуществующей сессией
+    if training_session is None:
+        raise WorkoutSessionNotFoundError
+
+    # Проверяем, что блок полностью помещается во временные рамки сессии
+    if (
+        workout_data.start_at < training_session.start_at
+        or workout_data.end_at > training_session.end_at
+    ):
+        raise WorkoutTimeOutsideSessionError
+
+    # Создаём объект блока тренировки
+    workout = Workout(
+        training_session_id=training_session_id,
+        **workout_data.model_dump(),
+    )
+
+    try:
+        # Добавляем блок в сессию базы данных
+        db.add(workout)
+
+        # Сохраняем изменения в PostgreSQL
+        db.commit()
+
+        # Получаем из базы созданный id и другие значения по умолчанию
+        db.refresh(workout)
+
+        return workout
+
+    except SQLAlchemyError as exc:
+        # Отменяем незавершённую транзакцию при ошибке БД
+        db.rollback()
+
+        # Передаём ошибку на уровень API
+        raise WorkoutSaveError from exc
+
+
+def get_workouts_for_training_session(
+    db: Session,
+    user_id: int,
+    training_session_id: int,
+) -> list[Workout]:
+    # Проверяем, что сессия принадлежит указанному пользователю
+    training_session = db.scalar(
+        select(TrainingSession).where(
+            TrainingSession.id == training_session_id,
+            TrainingSession.user_id == user_id,
+        )
+    )
+
+    if training_session is None:
+        raise WorkoutSessionNotFoundError
+
+    # Возвращаем блоки этой сессии по времени начала
+    workouts = db.scalars(
+        select(Workout)
+        .where(Workout.training_session_id == training_session_id)
+        .order_by(Workout.start_at, Workout.id)
+    ).all()
+
+    return list(workouts)
+
+
+def update_workout(
+    db: Session,
+    user_id: int,
+    training_session_id: int,
+    workout_id: int,
+    workout_data: WorkoutUpdate,
+) -> Workout:
+    # Проверяем принадлежность сессии пользователю
+    training_session = db.scalar(
+        select(TrainingSession).where(
+            TrainingSession.id == training_session_id,
+            TrainingSession.user_id == user_id,
+        )
+    )
+
+    if training_session is None:
+        raise WorkoutSessionNotFoundError
+
+    # Находим блок внутри указанной сессии
+    workout = db.scalar(
+        select(Workout).where(
+            Workout.id == workout_id,
+            Workout.training_session_id == training_session_id,
+        )
+    )
+
+    if workout is None:
+        raise WorkoutNotFoundError
+
+    # Получаем только те поля, которые клиент действительно передал
+    update_data = workout_data.model_dump(exclude_unset=True)
+
+    try:
+        # Обновляем переданные значения
+        for field, value in update_data.items():
+            setattr(workout, field, value)
+
+        # Сохраняем изменения в PostgreSQL
+        db.commit()
+
+        # Обновляем объект значениями из базы
+        db.refresh(workout)
+
+        return workout
+
+    except SQLAlchemyError as exc:
+        # Отменяем транзакцию при ошибке базы данных
+        db.rollback()
+
+        # Передаём ошибку на уровень API
+        raise WorkoutSaveError from exc
+
+
+def create_meal_entry(
+    db: Session,
+    user_id: int,
+    meal_data: MealEntryCreate,
+) -> MealEntry:
+    # Проверяем, что пользователь существует
+    user = db.get(User, user_id)
+
+    if user is None:
+        raise MealEntryUserNotFoundError
+
+    # Создаём объект записи о приёме пищи
+    meal_entry = MealEntry(
+        user_id=user_id,
+        **meal_data.model_dump(),
+    )
+
+    try:
+        # Добавляем запись в сессию базы данных
+        db.add(meal_entry)
+
+        # Сохраняем изменения в PostgreSQL
+        db.commit()
+
+        # Получаем ID и значения, сформированные базой данных
+        db.refresh(meal_entry)
+
+        return meal_entry
+
+    except SQLAlchemyError as exc:
+        # Отменяем транзакцию при ошибке базы данных
+        db.rollback()
+
+        # Передаём ошибку уровню API
+        raise MealEntrySaveError from exc
+
+
+def get_meal_entries(
+    db: Session,
+    user_id: int,
+    from_at: datetime | None = None,
+    to_at: datetime | None = None,
+) -> list[MealEntry]:
+    # Проверяем существование пользователя
+    user = db.get(User, user_id)
+
+    if user is None:
+        raise MealEntryUserNotFoundError
+
+    # Начинаем формировать запрос для конкретного пользователя
+    query = select(MealEntry).where(MealEntry.user_id == user_id)
+
+    # Если задано начало периода, исключаем более ранние записи
+    if from_at is not None:
+        query = query.where(MealEntry.eaten_at >= from_at)
+
+    # Если задан конец периода, исключаем более поздние записи
+    if to_at is not None:
+        query = query.where(MealEntry.eaten_at < to_at)
+
+    # Сортируем записи по времени приёма пищи
+    query = query.order_by(MealEntry.eaten_at, MealEntry.id)
+
+    # Выполняем запрос и возвращаем список
+    return list(db.scalars(query).all())
+
+
+def get_daily_nutrition_summary(
+    db: Session,
+    user_id: int,
+    target_date: date,
+) -> dict:
+    # Проверяем существование пользователя
+    user = db.get(User, user_id)
+
+    if user is None:
+        raise MealEntryUserNotFoundError
+
+    # Определяем начало и конец дня в часовом поясе пользователя
+    user_timezone = ZoneInfo(user.timezone or "UTC")
+
+    start_at = datetime.combine(
+        target_date,
+        time.min,
+        tzinfo=user_timezone,
+    )
+    end_at = datetime.combine(
+        target_date + timedelta(days=1),
+        time.min,
+        tzinfo=user_timezone,
+    )
+
+    # Суммируем калории и БЖУ по записям за выбранный день
+    result = db.execute(
+        select(
+            func.count(MealEntry.id),
+            func.coalesce(func.sum(MealEntry.calories), 0),
+            func.coalesce(func.sum(MealEntry.protein_g), 0),
+            func.coalesce(func.sum(MealEntry.fat_g), 0),
+            func.coalesce(func.sum(MealEntry.carbs_g), 0),
+        ).where(
+            MealEntry.user_id == user_id,
+            MealEntry.eaten_at >= start_at,
+            MealEntry.eaten_at < end_at,
+        )
+    ).one()
+
+    # Возвращаем агрегированные значения
+    return {
+        "date": target_date,
+        "user_id": user_id,
+        "entries_count": result[0],
+        "calories": result[1],
+        "protein_g": result[2],
+        "fat_g": result[3],
+        "carbs_g": result[4],
+    }

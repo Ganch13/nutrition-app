@@ -31,6 +31,19 @@ class User(Base):
         nullable=False,
     )
 
+    # Email для входа; у старых пользователей пока может отсутствовать
+    email: Mapped[str | None] = mapped_column(
+        String(255),
+        unique=True,
+        nullable=True,
+    )
+
+    # Хеш пароля для авторизации; у старых пользователей пока может отсутствовать
+    password_hash: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
     # Временное поле для совместимости со старыми записями.
     age: Mapped[int | None] = mapped_column(
         Integer,
@@ -497,4 +510,172 @@ class TrainingSession(Base):
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
+    )
+
+
+class Workout(Base):
+    __tablename__ = "workouts"
+
+    __table_args__ = (
+        # Допустимые типы нагрузки
+        CheckConstraint(
+            "load_type IN ('strength', 'cardio', 'mixed', 'other')",
+            name="ck_workouts_load_type",
+        ),
+
+        # Допустимая планируемая интенсивность
+        CheckConstraint(
+            "planned_intensity IN ('low', 'moderate', 'high')",
+            name="ck_workouts_planned_intensity",
+        ),
+
+        # Фактическая интенсивность может быть неизвестна
+        CheckConstraint(
+            """
+            actual_intensity IS NULL
+            OR actual_intensity IN ('low', 'moderate', 'high')
+            """,
+            name="ck_workouts_actual_intensity",
+        ),
+
+        # Окончание тренировки должно быть позже начала
+        CheckConstraint(
+            "end_at > start_at",
+            name="ck_workouts_time_range",
+        ),
+
+        # Ускоряем получение тренировок внутри сессии
+        Index(
+            "ix_workouts_session_start",
+            "training_session_id",
+            "start_at",
+        ),
+    )
+
+    # Уникальный идентификатор отдельной тренировки
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+    )
+
+    # Сессия, к которой относится эта тренировка
+    training_session_id: Mapped[int] = mapped_column(
+        ForeignKey("training_sessions.id"),
+        nullable=False,
+    )
+
+    # Название: силовая тренировка, баскетбол и т. д.
+    name: Mapped[str] = mapped_column(
+        String(150),
+        nullable=False,
+    )
+
+    # Тип нагрузки: strength, cardio, mixed или other
+    load_type: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+    )
+
+    # Планируемая интенсивность: low, moderate или high
+    planned_intensity: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+    )
+
+    # Фактическая интенсивность после выполнения
+    actual_intensity: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+    )
+
+    # Время начала отдельной тренировки
+    start_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+    # Время окончания отдельной тренировки
+    end_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+    # Дополнительные сведения
+    notes: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    # Дата и время создания записи
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
+class MealEntry(Base):
+    # Таблица записей о приёмах пищи
+    __tablename__ = "meal_entries"
+
+    __table_args__ = (
+        # Допустимые типы приёмов пищи
+        CheckConstraint(
+            "meal_type IN ('breakfast', 'lunch', 'dinner', 'snack', 'other')",
+            name="ck_meal_entries_meal_type",
+        ),
+
+        # Калорийность не может быть отрицательной
+        CheckConstraint(
+            "calories >= 0",
+            name="ck_meal_entries_calories",
+        ),
+
+        # Белки, жиры и углеводы не могут быть отрицательными
+        CheckConstraint(
+            "protein_g >= 0 AND fat_g >= 0 AND carbs_g >= 0",
+            name="ck_meal_entries_macros",
+        ),
+
+        # Индекс для поиска записей пользователя по времени
+        Index("ix_meal_entries_user_eaten_at", "user_id", "eaten_at"),
+    )
+
+    # Уникальный идентификатор записи
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    # Пользователь, которому принадлежит запись
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+    )
+
+    # Дата и время приёма пищи
+    eaten_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+    # Тип приёма пищи
+    meal_type: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    # Название или описание еды
+    description: Mapped[str] = mapped_column(String(250), nullable=False)
+
+    # Калорийность
+    calories: Mapped[Decimal] = mapped_column(Numeric(8, 2), nullable=False)
+
+    # Белки, жиры и углеводы в граммах
+    protein_g: Mapped[Decimal] = mapped_column(Numeric(8, 2), nullable=False)
+    fat_g: Mapped[Decimal] = mapped_column(Numeric(8, 2), nullable=False)
+    carbs_g: Mapped[Decimal] = mapped_column(Numeric(8, 2), nullable=False)
+
+    # Дополнительные заметки
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Время создания записи в базе данных
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
     )

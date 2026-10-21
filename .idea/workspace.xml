@@ -4,7 +4,10 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="8f179d62-2dc2-4487-b562-f5ac2bb54382" name="Changes" comment="Крайние изменения - добавил функцию взвушивания">
+    <list default="true" id="8f179d62-2dc2-4487-b562-f5ac2bb54382" name="Changes" comment="feat: добавление API для целей, расписания и тренировочных занятий (шаг 25)">
+      <change afterPath="$PROJECT_DIR$/.env" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/security.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/test_security.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/dbnavigator.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/dbnavigator.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
@@ -126,7 +129,15 @@
       <option name="project" value="LOCAL" />
       <updated>1792158314238</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="feat: добавление API для целей, расписания и тренировочных занятий (шаг 25)">
+      <option name="closed" value="true" />
+      <created>1792421761884</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1792421761884</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -136,6 +147,7 @@
     <MESSAGE value="Первое сохранение для общего доступа" />
     <MESSAGE value="Сохранение после первых изменений" />
     <MESSAGE value="Крайние изменения - добавил функцию взвушивания" />
-    <option name="LAST_COMMIT_MESSAGE" value="Крайние изменения - добавил функцию взвушивания" />
+    <MESSAGE value="feat: добавление API для целей, расписания и тренировочных занятий (шаг 25)" />
+    <option name="LAST_COMMIT_MESSAGE" value="feat: добавление API для целей, расписания и тренировочных занятий (шаг 25)" />
   </component>
 </project>

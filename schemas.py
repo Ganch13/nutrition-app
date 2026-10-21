@@ -1,4 +1,11 @@
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_validator,
+    model_validator,
+)
 from datetime import datetime, date
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -33,6 +40,33 @@ class UserCreate(BaseModel):
     def check_timezone(cls, value: str) -> str:
         return validate_timezone(value)
 
+
+class RegisterRequest(BaseModel):
+    """Данные для регистрации нового пользователя."""
+
+    name: str = Field(min_length=1, max_length=100)
+    email: EmailStr
+    password: str = Field(min_length=12, max_length=128)
+    height_cm: int = Field(gt=0, le=300)
+    birth_date: date | None = None
+    sex: Sex | None = None
+    occupation: str | None = Field(default=None, max_length=100)
+    timezone: str = Field(default="UTC", min_length=1, max_length=64)
+
+
+class LoginRequest(BaseModel):
+    """Данные для входа существующего пользователя."""
+
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=128)
+
+
+
+class TokenResponse(BaseModel):
+    """Ответ сервера после успешного входа."""
+
+    access_token: str
+    token_type: str = "bearer"
 
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -458,3 +492,164 @@ class TrainingSessionResponse(BaseModel):
     # Дополнительные данные
     notes: str | None
     created_at: datetime
+
+
+class WorkoutCreate(BaseModel):
+    # Название блока тренировки
+    name: str = Field(min_length=1, max_length=150)
+
+    # Тип нагрузки
+    load_type: Literal["strength", "cardio", "mixed", "other"]
+
+    # Планируемая интенсивность
+    planned_intensity: Literal["low", "moderate", "high"]
+
+    # Фактическая интенсивность; заполняется после тренировки
+    actual_intensity: Literal["low", "moderate", "high"] | None = None
+
+    # Начало и окончание блока
+    start_at: datetime
+    end_at: datetime
+
+    # Дополнительные заметки
+    notes: str | None = None
+
+    @field_validator("start_at", "end_at")
+    @classmethod
+    def require_timezone(cls, value: datetime) -> datetime:
+        # Не разрешаем даты без часового пояса
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Дата и время должны содержать часовой пояс")
+        return value
+
+    @model_validator(mode="after")
+    def validate_time_range(self):
+        # Окончание должно быть позже начала
+        if self.end_at <= self.start_at:
+            raise ValueError("Окончание должно быть позже начала")
+        return self
+
+
+class WorkoutResponse(BaseModel):
+
+    model_config = ConfigDict(from_attributes=True)
+
+    # Идентификатор блока
+    id: int
+
+    # Идентификатор тренировочной сессии
+    training_session_id: int
+
+    # Название блока
+    name: str
+
+    # Тип нагрузки
+    load_type: str
+
+    # Планируемая интенсивность
+    planned_intensity: str
+
+    # Фактическая интенсивность
+    actual_intensity: str | None
+
+    # Время начала и окончания
+    start_at: datetime
+    end_at: datetime
+
+    # Заметки
+    notes: str | None
+
+    # Время создания записи в базе данных
+    created_at: datetime
+
+
+
+
+class WorkoutUpdate(BaseModel):
+    # Фактическая интенсивность после выполнения
+    actual_intensity: Literal["low", "moderate", "high"] | None = None
+
+    # Заметки по результатам выполнения
+    notes: str | None = None
+
+
+class MealEntryCreate(BaseModel):
+    # Дата и время приёма пищи
+    eaten_at: datetime
+
+    # Тип приёма пищи
+    meal_type: Literal["breakfast", "lunch", "dinner", "snack", "other"]
+
+    # Название или описание еды
+    description: str = Field(min_length=1, max_length=250)
+
+    # Калорийность
+    calories: Decimal = Field(ge=0, max_digits=8, decimal_places=2)
+
+    # Белки, жиры и углеводы в граммах
+    protein_g: Decimal = Field(ge=0, max_digits=8, decimal_places=2)
+    fat_g: Decimal = Field(ge=0, max_digits=8, decimal_places=2)
+    carbs_g: Decimal = Field(ge=0, max_digits=8, decimal_places=2)
+
+    # Дополнительные заметки
+    notes: str | None = None
+
+    @field_validator("eaten_at")
+    @classmethod
+    def require_timezone(cls, value: datetime) -> datetime:
+        # Не принимаем дату без часового пояса
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Дата и время должны содержать часовой пояс")
+        return value
+
+
+class MealEntryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    # Идентификатор записи
+    id: int
+
+    # Владелец записи
+    user_id: int
+
+    # Дата и время приёма пищи
+    eaten_at: datetime
+
+    # Тип приёма пищи
+    meal_type: str
+
+    # Название еды
+    description: str
+
+    # Калорийность и БЖУ
+    calories: Decimal
+    protein_g: Decimal
+    fat_g: Decimal
+    carbs_g: Decimal
+
+    # Дополнительные заметки
+    notes: str | None
+
+    # Время создания записи
+    created_at: datetime
+
+
+
+class DailyNutritionSummary(BaseModel):
+    # День, за который рассчитаны итоги
+    date: date
+
+    # Идентификатор пользователя
+    user_id: int
+
+    # Количество записей о приёмах пищи
+    entries_count: int
+
+    # Общие калории и БЖУ за день
+    calories: Decimal
+    protein_g: Decimal
+    fat_g: Decimal
+    carbs_g: Decimal
+
+    # Настройки сериализации Pydantic 2 здесь не требуются,
+    # поскольку схема создаётся из обычных значений.

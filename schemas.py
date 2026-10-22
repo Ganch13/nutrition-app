@@ -52,6 +52,22 @@ class RegisterRequest(BaseModel):
     sex: Sex | None = None
     occupation: str | None = Field(default=None, max_length=100)
     timezone: str = Field(default="UTC", min_length=1, max_length=64)
+    @field_validator("timezone")
+    @classmethod
+    def check_timezone(cls, value: str) -> str:
+        """Проверяет, что timezone — существующее название IANA.
+
+        Когда вызывается: Pydantic запускает метод для поля timezone после
+        проверки, что это строка допустимой длины (1–64 символа).
+
+        value — присланное название, например "Europe/Berlin" или "Not/AZone".
+        Если зона существует, возвращаем то же значение: "Europe/Berlin".
+        Если не существует, validate_timezone выбросит ValueError с сообщением
+        "Use a valid IANA timezone...", а Pydantic превратит его в ответ 422.
+        """
+        # validate_timezone определена выше в этом же файле, её уже использует UserCreate.
+        # Она пытается создать ZoneInfo(value), и при неудаче выбрасывает ValueError.
+        return validate_timezone(value)
 
 
 class LoginRequest(BaseModel):
@@ -159,7 +175,6 @@ class UserUpdate(BaseModel):
 
 class HouseholdCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
-    owner_user_id: int = Field(gt=0)
 
 
 class HouseholdResponse(BaseModel):
@@ -181,6 +196,31 @@ class HouseholdMemberResponse(BaseModel):
     user_id: int
     role: str
     joined_at: datetime
+
+
+class UserHouseholdResponse(BaseModel):
+    """Домохозяйство вместе с ролью текущего пользователя в нём.
+
+    Используется в GET /households. Интерфейсу нужна роль, чтобы решить,
+    показывать ли кнопку «Добавить участника» (её видят только owner и admin).
+
+    Пример данных:
+        {"id": 1, "name": "Дом", "created_at": "2026-10-22T10:15:00Z",
+         "role": "owner"}
+    """
+
+    # Идентификатор домохозяйства, например 1
+    id: int
+
+    # Название домохозяйства, например "Дом"
+    name: str
+
+    # Дата и время создания, например 2026-10-22 10:15:00 в UTC
+    created_at: datetime
+
+    # Роль текущего пользователя в этом домохозяйстве. Допустимые значения
+    # те же, что в CheckConstraint таблицы household_members.
+    role: Literal["owner", "admin", "member"]
 
 
 class WeightRecordCreate(BaseModel):

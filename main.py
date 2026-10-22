@@ -1,8 +1,8 @@
 from fastapi import FastAPI, HTTPException, Depends
-from schemas import TokenResponse, LoginRequest, RegisterRequest, DailyNutritionSummary, MealEntryCreate, MealEntryResponse, WorkoutUpdate, WorkoutCreate, WorkoutResponse, TrainingSessionCreate, TrainingSessionResponse, ScheduleEventCreate, ScheduleEventResponse, GoalUpdate, GoalCreate, GoalResponse, WeightRecordCreate, WeightRecordResponse, UserUpdate, HouseholdMemberCreate, HouseholdMemberResponse,HouseholdCreate, HouseholdResponse, UserCreate, UserResponse
+from schemas import TokenResponse, LoginRequest, RegisterRequest, DailyNutritionSummary, MealEntryCreate, MealEntryResponse, WorkoutUpdate, WorkoutCreate, WorkoutResponse, TrainingSessionCreate, TrainingSessionResponse, ScheduleEventCreate, ScheduleEventResponse, GoalUpdate, GoalCreate, GoalResponse, WeightRecordCreate, WeightRecordResponse, UserUpdate, HouseholdMemberCreate, HouseholdMemberResponse,HouseholdCreate, HouseholdResponse, UserResponse, UserHouseholdResponse
 from database import get_db
 from sqlalchemy.orm import Session
-from services import ( authenticate_user as authenticate_user_service,
+from services import ( get_user_households as get_user_households_service, authenticate_user as authenticate_user_service,
 InvalidCredentialsError, register_user as register_user_service,
 EmailAlreadyRegisteredError, get_daily_nutrition_summary, MealEntryUserNotFoundError, MealEntrySaveError, create_meal_entry, get_meal_entries, update_workout, WorkoutNotFoundError, WorkoutSessionNotFoundError, WorkoutTimeOutsideSessionError, WorkoutSaveError, create_workout, get_workouts_for_training_session, ScheduleEventAlreadyLinkedError, ScheduleEventNotFoundError, create_training_session as create_training_session_service, get_training_sessions as get_training_sessions_service,create_schedule_event as create_schedule_event_service, get_schedule_events as get_schedule_events_service, GoalNotFoundError, InvalidGoalDatesError,
                        update_goal as update_goal_service, create_goal as create_goal_service, get_user_goals as get_user_goals_service, create_weight_record as create_weight_record_service,
@@ -12,8 +12,17 @@ EmailAlreadyRegisteredError, get_daily_nutrition_summary, MealEntryUserNotFoundE
 from datetime import datetime, date
 from security import create_access_token, get_current_user
 from models import User, HouseholdMember, Household
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 
 def require_same_user(
@@ -72,6 +81,28 @@ def require_household_member(
 def hello():
     print("Hello World")
     return {"message": "Hello Daniil"}
+
+
+@app.get("/users/me", response_model=UserResponse)
+def get_me_endpoint(current_user: User = Depends(get_current_user)):
+    """Возвращает профиль пользователя, которому принадлежит токен.
+
+    Зачем нужен: после входа интерфейс знает только токен. Этим запросом он
+    узнаёт id, имя и остальные данные профиля, не зная id заранее.
+
+    Запрос: GET /users/me с заголовком "Authorization: Bearer eyJhbGciOi..."
+    Ответ:  {"id": 1, "name": "Me User", "age": None, "birth_date": None,
+             "sex": None, "height_cm": 180, "occupation": None,
+             "timezone": "UTC", "created_at": "2026-10-22T10:15:00Z"}
+    """
+    # current_user — объект User из базы. Его уже нашла зависимость
+    # get_current_user по токену: User(id=1, name="Me User", ...).
+    # Отдельную функцию в services.py не создаём: дополнительных запросов
+    # к базе нет, поэтому нет и логики, которую стоило бы выносить.
+    #
+    # response_model=UserResponse оставит в ответе только разрешённые поля
+    # (без email и password_hash) и сам посчитает age по birth_date.
+    return current_user
 
 @app.get("/users/{user_id}", response_model=UserResponse,
     dependencies=[Depends(require_same_user)],)
@@ -170,6 +201,28 @@ def create_household_endpoint(
         )
 
     return db_household
+
+
+@app.get("/households", response_model=list[UserHouseholdResponse])
+def list_my_households_endpoint(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Возвращает домохозяйства текущего пользователя и его роль в каждом.
+
+    Зачем нужен: главный экран интерфейса показывает, в каких домохозяйствах
+    состоит пользователь и что он в них может делать.
+
+    Запрос: GET /households с заголовком "Authorization: Bearer ...".
+    Ответ:  [{"id": 1, "name": "Дом", "created_at": "2026-10-22T10:15:00Z",
+              "role": "owner"}]
+    Если пользователь пока ни в одном домохозяйстве, ответом будет пустой
+    список [].
+    """
+    # current_user.id — id владельца токена, например 1. Передаём только его,
+    # поэтому показываются только собственные домохозяйства.
+    # Это тот же GET-путь /households, что и у POST, но с другим методом.
+    return get_user_households_service(db=db, user_id=current_user.id)
 
 
 @app.post(

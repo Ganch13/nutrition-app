@@ -280,6 +280,64 @@ def get_household_members(
 
     return list(db.scalars(statement).all())
 
+
+def get_user_households(
+    db: Session,
+    user_id: int,
+) -> list[dict]:
+    """Возвращает домохозяйства пользователя вместе с его ролью в каждом.
+
+    Аргументы:
+        db      — сессия базы данных, её выдаёт get_db
+        user_id — id пользователя, например 1
+
+    Результат, например:
+        [
+            {"id": 1, "name": "Дом", "created_at": datetime(...), "role": "owner"},
+            {"id": 2, "name": "Дача", "created_at": datetime(...), "role": "member"},
+        ]
+
+    Проверять существование пользователя не нужно: сюда попадает только
+    тот, кого уже нашла проверка токена.
+    """
+
+    # Запрос на языке SQLAlchemy; в SQL это примерно:
+    #   SELECT households.*, household_members.role
+    #   FROM households
+    #   JOIN household_members ON household_members.household_id = households.id
+    #   WHERE household_members.user_id = 1
+    #   ORDER BY households.created_at, households.id
+    #
+    # JOIN связывает две таблицы: для каждого домохозяйства находит строки
+    # участников. WHERE оставляет только строки нашего пользователя, поэтому
+    # чужие домохозяйства в результат не попадают.
+    statement = (
+        select(Household, HouseholdMember.role)
+        # select_from явно говорит, что JOIN идёт от таблицы households
+        .select_from(Household)
+        .join(HouseholdMember, HouseholdMember.household_id == Household.id)
+        .where(HouseholdMember.user_id == user_id)
+        # Сначала старые домохозяйства; id нужен для стабильного порядка,
+        # если у двух домохозяйств одно и то же время создания
+        .order_by(Household.created_at.asc(), Household.id.asc())
+    )
+
+    # rows — список строк; в каждой строке два значения:
+    # (объект Household, роль), например (Household(id=1, name="Дом"), "owner")
+    rows = db.execute(statement).all()
+
+    # Превращаем каждую строку в словарь, который понимает UserHouseholdResponse.
+    # В цикле household — объект домохозяйства, role — строка с ролью.
+    return [
+        {
+            "id": household.id,
+            "name": household.name,
+            "created_at": household.created_at,
+            "role": role,
+        }
+        for household, role in rows
+    ]
+
 def update_user(
     db: Session,
     user_id: int,

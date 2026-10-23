@@ -1,0 +1,14 @@
+# --- Python / backend ---
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+
+# --- Node / frontend ---
+node_modules/
+.next/
+.env.local
+
+# --- IDE ---
+.idea/

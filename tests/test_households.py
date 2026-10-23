@@ -1,10 +1,31 @@
 import pytest
+from typing import TypedDict
+from tests.helpers import AuthUser, register_and_login
 
-from tests.helpers import register_and_login
+
+class HouseholdSetup(TypedDict):
+    """Описание словаря, который возвращает фикстура household_setup.
+
+    Пример данных:
+        {
+            "household_id": 1,
+            "owner":    {"id": 1, "headers": {...}},
+            "member":   {"id": 2, "headers": {...}},
+            "outsider": {"id": 3, "headers": {...}},
+        }
+    """
+
+    # Идентификатор созданного домохозяйства, например 1
+    household_id: int
+
+    # Три пользователя; у каждого есть id и готовые заголовки с токеном
+    owner: AuthUser
+    member: AuthUser
+    outsider: AuthUser
 
 
 @pytest.fixture()
-def household_setup(client):
+def household_setup(client) -> HouseholdSetup:
     """Готовит сцену: владелец, обычный участник, посторонний и одно домохозяйство."""
 
     # Каждый вызов возвращает словарь вида

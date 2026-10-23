@@ -13,14 +13,24 @@ from datetime import datetime, date
 from security import create_access_token, get_current_user
 from models import User, HouseholdMember, Household
 from fastapi.middleware.cors import CORSMiddleware
+from config import get_cors_origins
+
+
 
 app = FastAPI()
+# Разрешаем браузеру обращаться к API со страниц frontend.
+# Адреса берём из .env, чтобы в production их можно было заменить
+# без правки кода.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # Например ["http://localhost:3000"]
+    allow_origins=get_cors_origins(),
+    # Только методы, которые использует наш API
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    # Токен идёт в Authorization, тело запросов в формате JSON.
+    # Параметр allow_credentials не указываем: он нужен для cookie,
+    # а мы их не используем.
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 

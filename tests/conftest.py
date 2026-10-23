@@ -4,7 +4,10 @@ import os
 # JWT_SECRET_KEY при импорте. setdefault не затирает уже заданное значение,
 # а load_dotenv() в security.py по умолчанию не перезаписывает переменные окружения.
 os.environ.setdefault("JWT_SECRET_KEY", "test-only-secret-key-not-for-production")
-
+# Для тестов задаём разрешённый адрес frontend жёстко, а не из .env:
+# тесты CORS проверяют точные значения, и результат не должен зависеть
+# от настроек на вашем компьютере.
+os.environ["CORS_ORIGINS"] = "http://localhost:3000"
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text

@@ -5,42 +5,9 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="8f179d62-2dc2-4487-b562-f5ac2bb54382" name="Changes" comment="feat: Добавление frontend главной страницы и страницы авторизации">
-      <change afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/backend/.env.example" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.env" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/nutrition-app.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/nutrition-app.iml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/alembic.ini" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/alembic/README" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/alembic/env.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/alembic/script.py.mako" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/alembic/versions/04739d5f8635_initial_users_table.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/alembic/versions/15d1fff2c3de_add_profile_fields_to_users.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/alembic/versions/300f37e1ee62_add_weight_records.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/alembic/versions/38cf8b7f607f_add_meal_entries.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/alembic/versions/3dd521a13bc7_add_training_sessions.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/alembic/versions/4f06695532d7_add_workouts.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/alembic/versions/65bed3b7678d_add_password_hash_to_users.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/alembic/versions/68a1cc826ba7_add_email_to_users.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/alembic/versions/81c32eec0cd9_add_created_at_to_users.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/alembic/versions/a5edc7d776f0_add_schedule_events.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/alembic/versions/d7f8b0e407f8_add_user_goals.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/alembic/versions/f016ac759ba7_add_households_and_household_members.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/config.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/database.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/models.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/pytest.ini" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/schemas.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/security.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/services.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/conftest.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/helpers.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/test_auth.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/test_cors.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/test_households.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/test_users.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/api.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/api.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/app/page.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/app/page.tsx" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -121,7 +88,7 @@
     "git-widget-placeholder": "develop",
     "git.auto.fetch.suggestion.counter": "1",
     "nodejs_package_manager_path": "npm",
-    "settings.editor.selected.configurable": "com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable",
+    "settings.editor.selected.configurable": "vcs.log",
     "ts.external.directory.path": "C:\\Users\\user\\PycharmProjects\\nutrition-app\\frontend\\node_modules\\typescript\\lib"
   }
 }]]></component>
@@ -224,15 +191,9 @@
         <entry key="MAIN">
           <value>
             <State>
-              <option name="FILTERS">
+              <option name="CUSTOM_BOOLEAN_PROPERTIES">
                 <map>
-                  <entry key="branch">
-                    <value>
-                      <list>
-                        <option value="master" />
-                      </list>
-                    </value>
-                  </entry>
+                  <entry key="Show.Git.Branches" value="true" />
                 </map>
               </option>
             </State>

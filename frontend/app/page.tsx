@@ -1,4 +1,44 @@
+"use client";
 
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { apiRequest } from "../api";
+
+type UserProfile = {
+  id: number;
+  name: string;
+  age: number | null;
+  birth_date: string | null;
+  sex: string | null;
+  height_cm: number | null;
+  occupation: string | null;
+  timezone: string;
+  created_at: string;
+};
+type WeightRecord = {
+  id: number;
+  user_id: number;
+  measurement_date: string;
+  weight_kg: string;
+  body_fat_percent: string | null;
+  notes: string | null;
+  created_at: string;
+};
+
+type UserGoal = {
+  id: number;
+  user_id: number;
+  goal_type: string;
+  priority: number;
+  target_weight_kg: string | null;
+  target_body_fat_percent: string | null;
+  desired_rate_kg_per_week: string | null;
+  start_date: string;
+  target_date: string | null;
+  status: string;
+  notes: string | null;
+  created_at: string;
+};
 const meals = [
   { time: "08:00", name: "Завтрак", description: "Овсянка, яйца, фрукты", kcal: 620, done: true },
   { time: "13:00", name: "Обед", description: "Рис, курица, овощи", kcal: 750, done: false },
@@ -15,6 +55,95 @@ const navigation = [
 ];
 
 export default function Home() {
+    const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [profileError, setProfileError] = useState<string | null>(null);
+    const [weightRecords, setWeightRecords] = useState<WeightRecord[]>([]);
+  const [goals, setGoals] = useState<UserGoal[]>([]);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [statsError, setStatsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadProfile() {
+      try {
+        const data = await apiRequest<UserProfile>("/users/me");
+
+        if (!cancelled) {
+          setProfile(data);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setProfileError(
+            error instanceof Error
+              ? error.message
+              : "Не удалось загрузить профиль.",
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setProfileLoading(false);
+        }
+      }
+    }
+
+    loadProfile();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+    useEffect(() => {
+    if (!profile) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadStats() {
+      setStatsLoading(true);
+      setStatsError(null);
+
+      try {
+        const [weightsData, goalsData] = await Promise.all([
+          apiRequest<WeightRecord[]>(
+            `/users/${profile?.id}/weight-records`,
+          ),
+          apiRequest<UserGoal[]>(
+            `/users/${profile?.id}/goals`,
+          ),
+        ]);
+
+        if (!cancelled) {
+          setWeightRecords(weightsData);
+          setGoals(goalsData);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setStatsError(
+            error instanceof Error
+              ? error.message
+              : "Не удалось загрузить вес и цели.",
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setStatsLoading(false);
+        }
+      }
+    }
+
+    loadStats();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [profile]);
+    function handleLogout() {
+    sessionStorage.removeItem("access_token");
+    window.location.assign("/login");
+  }
   const caloriesEaten = meals
     .filter((meal) => meal.done)
     .reduce((sum, meal) => sum + meal.kcal, 0);
@@ -24,6 +153,23 @@ export default function Home() {
     Math.round((caloriesEaten / calorieGoal) * 100),
     100
   );
+  const latestWeight = [...weightRecords].sort(
+    (a, b) =>
+      new Date(b.measurement_date).getTime() -
+      new Date(a.measurement_date).getTime(),
+  )[0];
+
+  const activeGoal = goals
+    .filter((goal) => goal.status === "active")
+    .sort((a, b) => a.priority - b.priority)[0];
+
+  const currentWeight = latestWeight
+    ? Number(latestWeight.weight_kg)
+    : null;
+
+  const targetWeight = activeGoal?.target_weight_kg
+    ? Number(activeGoal.target_weight_kg)
+    : null;
 
   return (
     <main className="min-h-screen bg-[#f5f6f8] text-slate-900">
@@ -73,15 +219,36 @@ export default function Home() {
             <div>
               <p className="text-sm text-slate-500">Четверг · Твой план на день</p>
               <h1 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">
-                Привет! 👋
+  {profileLoading
+    ? "Загружаем профиль..."
+    : profile
+      ? `Привет, ${profile.name}! 👋`
+      : "Привет! 👋"}
               </h1>
+
+                {profileError && (
+                <p className="mt-2 text-sm text-red-600">
+                  Не удалось загрузить профиль: {profileError}
+                </p>
+                  )}
+
               <p className="mt-2 text-sm text-slate-500">
                 Двигайся к своим целям шаг за шагом.
               </p>
             </div>
 
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-emerald-100 font-bold text-emerald-800">
-              Д
+            <div className="flex shrink-0 items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-full bg-emerald-100 font-bold text-emerald-800">
+                {profile?.name?.trim().charAt(0).toUpperCase() || "?"}
+              </div>
+
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+              >
+                Выйти
+              </button>
             </div>
           </header>
 
@@ -98,14 +265,27 @@ export default function Home() {
             <div className="mt-6 grid grid-cols-2 gap-3 sm:max-w-lg">
               <div className="rounded-2xl bg-white/10 p-4">
                 <p className="text-xs text-emerald-100">Текущий вес</p>
-                <p className="mt-1 text-2xl font-bold">100 кг</p>
+                <p className="mt-1 text-2xl font-bold">
+                  {statsLoading
+                    ? "Загрузка..."
+                    : currentWeight !== null
+                      ? `${currentWeight.toLocaleString("ru-RU")} кг`
+                      : "Нет данных"}
+                </p>
               </div>
               <div className="rounded-2xl bg-white/10 p-4">
                 <p className="text-xs text-emerald-100">Целевой вес</p>
-                <p className="mt-1 text-2xl font-bold">96 кг</p>
+                <p className="mt-1 text-2xl font-bold">
+                  {statsLoading
+                    ? "Загрузка..."
+                    : targetWeight !== null
+                      ? `${targetWeight.toLocaleString("ru-RU")} кг`
+                      : "Цель не задана"}
+                </p>
               </div>
             </div>
           </div>
+
 
           <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             <article className="rounded-2xl border border-slate-200 bg-white p-5">

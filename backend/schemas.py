@@ -222,6 +222,50 @@ class UserHouseholdResponse(BaseModel):
     # те же, что в CheckConstraint таблицы household_members.
     role: Literal["owner", "admin", "member"]
 
+class HouseholdMemberDetailResponse(BaseModel):
+    """Участник домохозяйства с именем (для экрана «Семья»).
+
+    Пример: {"household_id": 1, "user_id": 2, "name": "Леся", "role": "member",
+             "joined_at": "2026-10-26T10:05:00Z"}
+    Email и другие данные профиля намеренно не отдаём: участникам нужны только имена.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    household_id: int
+    user_id: int
+    name: str
+    role: Literal["owner", "admin", "member"]
+    joined_at: datetime
+
+
+class HouseholdInviteResponse(BaseModel):
+    """Код приглашения. Пример: {"id": 1, "household_id": 1, "code": "K7M29QXP",
+    "created_at": "2026-10-26T10:00:00Z", "expires_at": "2026-11-02T10:00:00Z"}"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    household_id: int
+    code: str
+    created_at: datetime
+    expires_at: datetime
+
+
+class HouseholdJoinRequest(BaseModel):
+    """Тело запроса POST /households/join. Пример: {"code": "K7M2-9QXP"}.
+    Регистр и дефис не важны: код нормализует сервис."""
+
+    code: str = Field(min_length=1, max_length=64)
+
+
+class HouseholdMemberRoleUpdate(BaseModel):
+    """Тело запроса PATCH .../members/{user_id}. Пример: {"role": "admin"}.
+    Роль «owner» назначить нельзя: владелец один, передачу владения сделаем позже."""
+
+    role: Literal["admin", "member"]
+
+
 
 class WeightRecordCreate(BaseModel):
     measurement_date: date
@@ -693,3 +737,144 @@ class DailyNutritionSummary(BaseModel):
 
     # Настройки сериализации Pydantic 2 здесь не требуются,
     # поскольку схема создаётся из обычных значений.
+
+
+class TrainingSessionUpdate(BaseModel):
+    """Изменение тренировочной сессии: статус и заметки.
+
+    Пример тела запроса: {"status": "completed"}
+    Время и название менять нельзя; передавать можно любое из двух полей.
+    """
+
+    # Новый статус: planned, completed, skipped или cancelled
+    status: TrainingSessionStatus | None = None
+
+    # Новые заметки; null очищает заметки
+    notes: str | None = None
+
+
+# ---------- Финансы ----------
+
+# Вид книги: личная или семейная
+LedgerKind = Literal["personal", "household"]
+
+# Тип категории и операции: расход или доход
+FinanceKind = Literal["expense", "income"]
+
+
+class LedgerCreate(BaseModel):
+    """Создание финансовой книги.
+
+    Примеры тела запроса:
+        {"kind": "personal", "currency": "EUR"}
+        {"kind": "household", "household_id": 1, "currency": "EUR"}
+    """
+
+    kind: LedgerKind
+
+    # Обязателен для семейной книги и запрещён для личной
+    household_id: int | None = Field(default=None, gt=0)
+
+    # Код валюты из трёх заглавных букв
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+
+    @model_validator(mode="after")
+    def validate_owner(self):
+        if self.kind == "household" and self.household_id is None:
+            raise ValueError("household_id is required for a household ledger")
+
+        if self.kind == "personal" and self.household_id is not None:
+            raise ValueError("household_id must not be set for a personal ledger")
+
+        return self
+
+
+class LedgerResponse(BaseModel):
+    """Книга и права текущего пользователя в ней."""
+
+    id: int
+    kind: LedgerKind
+    household_id: int | None
+    # Название домохозяйства для семейной книги
+    household_name: str | None
+    currency: str
+    # True, если пользователь может управлять категориями и лимитами
+    can_manage: bool
+
+
+class FinanceCategoryCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    kind: FinanceKind
+
+    @field_validator("name")
+    @classmethod
+    def strip_name(cls, value: str) -> str:
+        # Убираем пробелы по краям; название из одних пробелов не допускаем
+        value = value.strip()
+
+        if not value:
+            raise ValueError("Category name must not be empty")
+
+        return value
+
+
+class FinanceCategoryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    ledger_id: int
+    name: str
+    kind: FinanceKind
+
+
+class FinanceTransactionCreate(BaseModel):
+    """Новая операция, например:
+    {"category_id": 3, "amount": 120.5, "occurred_on": "2026-10-26", "description": "Магазин"}
+    """
+
+    category_id: int = Field(gt=0)
+    amount: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
+    occurred_on: date
+    description: str | None = Field(default=None, max_length=250)
+
+
+class FinanceTransactionResponse(BaseModel):
+    id: int
+    ledger_id: int
+    category_id: int
+    category_name: str
+    kind: FinanceKind
+    amount: Decimal
+    occurred_on: date
+    description: str | None
+    created_by_user_id: int
+    created_by_name: str
+    created_at: datetime
+
+
+class FinanceBudgetSet(BaseModel):
+    """Лимит на категорию. Значение null (или отсутствие поля) убирает лимит."""
+
+    monthly_limit: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=2)
+
+
+class CategorySummary(BaseModel):
+    """Итог по категории за месяц и её лимит."""
+
+    category_id: int
+    name: str
+    kind: FinanceKind
+    total: Decimal
+    budget_limit: Decimal | None
+
+
+class FinanceSummaryResponse(BaseModel):
+    """Сводка за месяц."""
+
+    ledger_id: int
+    month: str
+    currency: str
+    income: Decimal
+    expense: Decimal
+    balance: Decimal
+    categories: list[CategorySummary]

@@ -1,19 +1,26 @@
 from fastapi import FastAPI, HTTPException, Depends
-from schemas import TokenResponse, LoginRequest, RegisterRequest, DailyNutritionSummary, MealEntryCreate, MealEntryResponse, WorkoutUpdate, WorkoutCreate, WorkoutResponse, TrainingSessionCreate, TrainingSessionResponse, ScheduleEventCreate, ScheduleEventResponse, GoalUpdate, GoalCreate, GoalResponse, WeightRecordCreate, WeightRecordResponse, UserUpdate, HouseholdMemberCreate, HouseholdMemberResponse,HouseholdCreate, HouseholdResponse, UserResponse, UserHouseholdResponse
+from schemas import TrainingSessionUpdate, TokenResponse, LoginRequest, RegisterRequest, DailyNutritionSummary, MealEntryCreate, MealEntryResponse, WorkoutUpdate, WorkoutCreate, WorkoutResponse, TrainingSessionCreate, TrainingSessionResponse, ScheduleEventCreate, ScheduleEventResponse, GoalUpdate, GoalCreate, GoalResponse, WeightRecordCreate, WeightRecordResponse, UserUpdate, HouseholdMemberCreate, HouseholdMemberResponse,HouseholdCreate, HouseholdResponse, UserResponse, UserHouseholdResponse
 from database import get_db
 from sqlalchemy.orm import Session
-from services import ( get_user_households as get_user_households_service, authenticate_user as authenticate_user_service,
+from services import (delete_goal, delete_training_session, delete_workout, get_meal_entries_for_day, delete_meal_entry, MealEntryNotFoundError,
+                      delete_weight_record, WeightRecordNotFoundError,
+                      update_training_session as update_training_session_service,
+                      TrainingSessionNotFoundError, get_user_households as get_user_households_service, authenticate_user as authenticate_user_service,
 InvalidCredentialsError, register_user as register_user_service,
 EmailAlreadyRegisteredError, get_daily_nutrition_summary, MealEntryUserNotFoundError, MealEntrySaveError, create_meal_entry, get_meal_entries, update_workout, WorkoutNotFoundError, WorkoutSessionNotFoundError, WorkoutTimeOutsideSessionError, WorkoutSaveError, create_workout, get_workouts_for_training_session, ScheduleEventAlreadyLinkedError, ScheduleEventNotFoundError, create_training_session as create_training_session_service, get_training_sessions as get_training_sessions_service,create_schedule_event as create_schedule_event_service, get_schedule_events as get_schedule_events_service, GoalNotFoundError, InvalidGoalDatesError,
                        update_goal as update_goal_service, create_goal as create_goal_service, get_user_goals as get_user_goals_service, create_weight_record as create_weight_record_service,
                       get_weight_records as get_weight_records_service, update_user as update_user_service, get_household_members as get_household_members_service,
-                      create_user as create_user_service, get_user as get_user_service, create_household as create_household_service, HouseholdMemberAlreadyExistsError,
+                      get_user as get_user_service, create_household as create_household_service, HouseholdMemberAlreadyExistsError,
                       HouseholdNotFoundError, UserNotFoundError, add_household_member as add_household_member_service)
 from datetime import datetime, date
 from security import create_access_token, get_current_user
 from models import User, HouseholdMember, Household
 from fastapi.middleware.cors import CORSMiddleware
 from config import get_cors_origins
+from finance_routes import router as finance_router, register_error_handlers
+from access import require_household_member
+from household_routes import router as household_router
+from schemas import HouseholdMemberDetailResponse
 
 
 
@@ -26,12 +33,15 @@ app.add_middleware(
     # Например ["http://localhost:3000"]
     allow_origins=get_cors_origins(),
     # Только методы, которые использует наш API
-    allow_methods=["GET", "POST", "PATCH", "DELETE"],
-    # Токен идёт в Authorization, тело запросов в формате JSON.
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],    # Токен идёт в Authorization, тело запросов в формате JSON.
     # Параметр allow_credentials не указываем: он нужен для cookie,
     # а мы их не используем.
     allow_headers=["Authorization", "Content-Type"],
 )
+# Финансы: эндпоинты /finance/... и преобразование их ошибок в HTTP-ответы
+app.include_router(finance_router)
+app.include_router(household_router)
+register_error_handlers(app)
 
 
 
@@ -50,41 +60,7 @@ def require_same_user(
 
 
 
-def require_household_member(
-    household_id: int,
-    db: Session,
-    current_user: User,
-    allowed_roles: tuple[str, ...] | None = None,
-):
-    """Проверяет членство пользователя и, при необходимости, его роль."""
 
-    membership = db.get(
-        HouseholdMember,
-        (household_id, current_user.id),
-    )
-
-    if db.get(Household, household_id) is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Домохозяйство не найдено",
-        )
-
-    if membership is None:
-        raise HTTPException(
-            status_code=403,
-            detail="Нет доступа к этому домохозяйству",
-        )
-
-    if (
-        allowed_roles is not None
-        and membership.role not in allowed_roles
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="Недостаточно прав для выполнения действия",
-        )
-
-    return membership
 
 
 @app.get("/hello")
@@ -280,7 +256,7 @@ def add_household_member_endpoint(
 
 @app.get(
     "/households/{household_id}/members",
-    response_model=list[HouseholdMemberResponse],
+    response_model=list[HouseholdMemberDetailResponse],
 )
 def get_household_members_endpoint(
     household_id: int,
@@ -851,4 +827,190 @@ def daily_nutrition_summary_endpoint(
         raise HTTPException(
             status_code=404,
             detail="Пользователь не найден",
+        )
+
+
+@app.get(
+    "/users/{user_id}/nutrition/daily-entries",
+    response_model=list[MealEntryResponse],
+    dependencies=[Depends(require_same_user)],
+)
+def daily_meal_entries_endpoint(
+    user_id: int,
+    target_date: date,
+    db: Session = Depends(get_db),
+):
+    """Приёмы пищи за один день по часовому поясу пользователя.
+
+    Запрос: GET /users/1/nutrition/daily-entries?target_date=2026-10-23
+    Ответ:  список MealEntryResponse по времени; пустой список, если записей нет.
+    """
+    try:
+        return get_meal_entries_for_day(
+            db=db,
+            user_id=user_id,
+            target_date=target_date,
+        )
+    except MealEntryUserNotFoundError:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+
+@app.delete(
+    "/users/{user_id}/meal-entries/{entry_id}",
+    status_code=204,
+    dependencies=[Depends(require_same_user)],
+)
+def delete_meal_entry_endpoint(
+    user_id: int,
+    entry_id: int,
+    db: Session = Depends(get_db),
+):
+    """Удаляет запись о приёме пищи. Успех: 204 без тела; нет записи: 404."""
+    try:
+        delete_meal_entry(db=db, user_id=user_id, entry_id=entry_id)
+    except MealEntryNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail="Запись о приёме пищи не найдена",
+        )
+    except MealEntrySaveError:
+        raise HTTPException(
+            status_code=500,
+            detail="Не удалось удалить запись о приёме пищи",
+        )
+
+
+@app.delete(
+    "/users/{user_id}/weight-records/{record_id}",
+    status_code=204,
+    dependencies=[Depends(require_same_user)],
+)
+def delete_weight_record_endpoint(
+    user_id: int,
+    record_id: int,
+    db: Session = Depends(get_db),
+):
+    """Удаляет запись веса. Успех: 204 без тела; нет записи: 404."""
+    try:
+        delete_weight_record(db=db, user_id=user_id, record_id=record_id)
+    except WeightRecordNotFoundError:
+        raise HTTPException(status_code=404, detail="Запись веса не найдена")
+
+
+@app.patch(
+    "/users/{user_id}/training-sessions/{training_session_id}",
+    response_model=TrainingSessionResponse,
+    dependencies=[Depends(require_same_user)],
+)
+def update_training_session_endpoint(
+    user_id: int,
+    training_session_id: int,
+    session_data: TrainingSessionUpdate,
+    db: Session = Depends(get_db),
+):
+    """Меняет статус и/или заметки тренировочной сессии.
+
+    Пример тела: {"status": "completed"}
+    """
+    # Только поля, которые клиент действительно передал
+    changes = session_data.model_dump(exclude_unset=True)
+
+    if not changes:
+        raise HTTPException(
+            status_code=422,
+            detail="Provide at least one field to update",
+        )
+
+    # Статус не может быть пустым; очищать через null можно только заметки
+    if "status" in changes and changes["status"] is None:
+        raise HTTPException(status_code=422, detail="status cannot be null")
+
+    try:
+        return update_training_session_service(
+            db=db,
+            user_id=user_id,
+            training_session_id=training_session_id,
+            changes=changes,
+        )
+    except TrainingSessionNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail="Тренировочная сессия не найдена у указанного пользователя",
+        )
+
+
+@app.delete(
+    "/users/{user_id}/goals/{goal_id}",
+    status_code=204,
+    dependencies=[Depends(require_same_user)],
+)
+def delete_goal_endpoint(
+    user_id: int,
+    goal_id: int,
+    db: Session = Depends(get_db),
+):
+    """Удаляет цель навсегда. Успех: 204 без тела; нет цели: 404."""
+    try:
+        delete_goal(db=db, user_id=user_id, goal_id=goal_id)
+    except GoalNotFoundError:
+        raise HTTPException(status_code=404, detail="Цель не найдена")
+
+
+@app.delete(
+    "/users/{user_id}/training-sessions/{training_session_id}",
+    status_code=204,
+    dependencies=[Depends(require_same_user)],
+)
+def delete_training_session_endpoint(
+    user_id: int,
+    training_session_id: int,
+    db: Session = Depends(get_db),
+):
+    """Удаляет тренировочную сессию вместе с её блоками. Успех: 204."""
+    try:
+        delete_training_session(
+            db=db,
+            user_id=user_id,
+            training_session_id=training_session_id,
+        )
+    except TrainingSessionNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail="Тренировочная сессия не найдена у указанного пользователя",
+        )
+
+
+@app.delete(
+    "/users/{user_id}/training-sessions/{training_session_id}/workouts/{workout_id}",
+    status_code=204,
+    dependencies=[Depends(require_same_user)],
+)
+def delete_workout_endpoint(
+    user_id: int,
+    training_session_id: int,
+    workout_id: int,
+    db: Session = Depends(get_db),
+):
+    """Удаляет один блок тренировки. Успех: 204 без тела."""
+    try:
+        delete_workout(
+            db=db,
+            user_id=user_id,
+            training_session_id=training_session_id,
+            workout_id=workout_id,
+        )
+    except WorkoutSessionNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail="Тренировочная сессия не найдена у указанного пользователя",
+        )
+    except WorkoutNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail="Блок тренировки не найден в указанной сессии",
+        )
+    except WorkoutSaveError:
+        raise HTTPException(
+            status_code=500,
+            detail="Не удалось удалить блок тренировки",
         )

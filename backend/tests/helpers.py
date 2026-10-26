@@ -20,7 +20,12 @@ class AuthUser(TypedDict):
     headers: dict[str, str]
 
 
-def register_and_login(client, email: str, name: str = "Test User") -> AuthUser:
+def register_and_login(
+    client,
+    email: str,
+    name: str = "Test User",
+    timezone: str = "UTC",
+) -> AuthUser:
     """Регистрирует пользователя, входит и возвращает его id и заголовки с токеном.
 
     Аргументы:
@@ -43,6 +48,7 @@ def register_and_login(client, email: str, name: str = "Test User") -> AuthUser:
             "email": email,
             "password": password,
             "height_cm": 180,
+            "timezone": timezone,
         },
     )
     # response.status_code → 201
@@ -63,3 +69,5 @@ def register_and_login(client, email: str, name: str = "Test User") -> AuthUser:
 
     # Возвращаем словарь с тем же набором ключей, что описан в AuthUser
     return {"id": user_id, "headers": {"Authorization": f"Bearer {token}"}}
+
+

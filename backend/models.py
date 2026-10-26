@@ -1,4 +1,4 @@
-from sqlalchemy import (Date, CheckConstraint, DateTime,
+from sqlalchemy import (UniqueConstraint, Date, CheckConstraint, DateTime,
                         ForeignKey, Integer, String, func,
                         text, Index, Numeric, Text)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -679,3 +679,181 @@ class MealEntry(Base):
         nullable=False,
         server_default=func.now(),
     )
+
+
+class Ledger(Base):
+    """Финансовая книга: личная (принадлежит пользователю) или семейная (домохозяйству)."""
+
+    __tablename__ = "ledgers"
+
+    __table_args__ = (
+        # Книга принадлежит либо пользователю, либо домохозяйству, но не обоим сразу
+        CheckConstraint(
+            """
+            (user_id IS NOT NULL AND household_id IS NULL)
+            OR (user_id IS NULL AND household_id IS NOT NULL)
+            """,
+            name="ck_ledgers_single_owner",
+        ),
+        # Код валюты ISO 4217 состоит из трёх букв, например EUR
+        CheckConstraint("char_length(currency) = 3", name="ck_ledgers_currency_length"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    # Владелец личной книги. unique: у пользователя может быть только одна личная книга
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"),
+        unique=True,
+        nullable=True,
+    )
+
+    # Владелец семейной книги. unique: у домохозяйства может быть только одна книга
+    household_id: Mapped[int | None] = mapped_column(
+        ForeignKey("households.id"),
+        unique=True,
+        nullable=True,
+    )
+
+    # Код валюты книги, например "EUR"; после создания не меняется
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class FinanceCategory(Base):
+    """Категория операций внутри книги: расход или доход."""
+
+    __tablename__ = "finance_categories"
+
+    __table_args__ = (
+        CheckConstraint("kind IN ('expense', 'income')", name="ck_finance_categories_kind"),
+        # В одной книге не может быть двух одинаковых категорий одного типа
+        UniqueConstraint("ledger_id", "kind", "name", name="uq_finance_categories_ledger_kind_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    ledger_id: Mapped[int] = mapped_column(ForeignKey("ledgers.id"), nullable=False)
+
+    # Название, например "Продукты"
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+
+    # Тип: expense (расход) или income (доход)
+    kind: Mapped[str] = mapped_column(String(10), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class FinanceTransaction(Base):
+    """Операция: расход или доход (тип определяется категорией)."""
+
+    __tablename__ = "finance_transactions"
+
+    __table_args__ = (
+        # Сумма всегда положительная; знак определяется типом категории
+        CheckConstraint("amount > 0", name="ck_finance_transactions_amount_positive"),
+        # Ускоряем выборку операций книги за период
+        Index("ix_finance_transactions_ledger_date", "ledger_id", "occurred_on"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    ledger_id: Mapped[int] = mapped_column(ForeignKey("ledgers.id"), nullable=False)
+
+    category_id: Mapped[int] = mapped_column(
+        ForeignKey("finance_categories.id"),
+        nullable=False,
+    )
+
+    # Сумма в валюте книги, например Decimal("120.50")
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+
+    # Дата операции (без времени)
+    occurred_on: Mapped[date] = mapped_column(Date, nullable=False)
+
+    description: Mapped[str | None] = mapped_column(String(250), nullable=True)
+
+    # Кто внёс операцию (важно в семейной книге)
+    created_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class FinanceBudget(Base):
+    """Месячный лимит расходов на категорию."""
+
+    __tablename__ = "finance_budgets"
+
+    __table_args__ = (
+        CheckConstraint("monthly_limit > 0", name="ck_finance_budgets_limit_positive"),
+        # На категорию в книге может быть только один лимит
+        UniqueConstraint("ledger_id", "category_id", name="uq_finance_budgets_ledger_category"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    ledger_id: Mapped[int] = mapped_column(ForeignKey("ledgers.id"), nullable=False)
+
+    category_id: Mapped[int] = mapped_column(
+        ForeignKey("finance_categories.id"),
+        nullable=False,
+    )
+
+    monthly_limit: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+
+
+class HouseholdInvite(Base):
+    """Одноразовый код приглашения в домохозяйство.
+
+    Пример строки таблицы:
+        id=1, household_id=1, code="K7M29QXP", created_by_user_id=1,
+        created_at=2026-10-26 10:00, expires_at=2026-11-02 10:00,
+        used_at=None, used_by_user_id=None
+    Пока used_at пустой и срок не вышел, код можно использовать.
+    """
+
+    __tablename__ = "household_invites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    # В какое домохозяйство приглашают, например 1.
+    # index=True ускоряет запрос «все коды этого домохозяйства»
+    household_id: Mapped[int] = mapped_column(
+        ForeignKey("households.id"),
+        nullable=False,
+        index=True,
+    )
+
+    # Сам код, например "K7M29QXP". unique: двух одинаковых кодов быть не может
+    code: Mapped[str] = mapped_column(String(16), unique=True, nullable=False)
+
+    # Кто создал код (владелец или администратор), например 1
+    created_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    # До какого момента код действует, например 2026-11-02 10:00
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    # Когда код использовали; None — ещё не использован
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Кто воспользовался кодом, например 2; None — никто
+    used_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)

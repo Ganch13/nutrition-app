@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from models import MealEntry, Workout, TrainingSession, ScheduleEvent, ScheduleEvent, Goal, Household, HouseholdMember, User, WeightRecord
 from schemas import  LoginRequest, RegisterRequest, MealEntryCreate, WorkoutUpdate, WorkoutCreate, TrainingSessionCreate, ScheduleEventCreate, GoalCreate, UserCreate, WeightRecordCreate
-from sqlalchemy import select, case, func
+from sqlalchemy import select, case, func, delete
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 from security import hash_password, verify_password
@@ -77,6 +77,20 @@ class InvalidCredentialsError(Exception):
     """Ошибка: неверные учётные данные."""
     pass
 
+
+class MealEntryNotFoundError(Exception):
+    # Запись о приёме пищи не найдена у этого пользователя
+    pass
+
+
+class WeightRecordNotFoundError(Exception):
+    # Запись веса не найдена у этого пользователя
+    pass
+
+
+class TrainingSessionNotFoundError(Exception):
+    # Тренировочная сессия не найдена у этого пользователя
+    pass
 
 
 
@@ -263,14 +277,25 @@ def add_household_member(
 def get_household_members(
     db: Session,
     household_id: int,
-) -> list[HouseholdMember]:
+) -> list[dict]:
+    """Участники домохозяйства вместе с именами.
+
+    Результат, например:
+        [{"household_id": 1, "user_id": 1, "name": "Даня", "role": "owner",
+          "joined_at": datetime(...)},
+         {"household_id": 1, "user_id": 2, "name": "Леся", "role": "member",
+          "joined_at": datetime(...)}]
+    """
     household = db.get(Household, household_id)
 
     if household is None:
         raise HouseholdNotFoundError()
 
+    # SQL примерно: SELECT household_members.*, users.name FROM household_members
+    #               JOIN users ON users.id = household_members.user_id WHERE ...
     statement = (
-        select(HouseholdMember)
+        select(HouseholdMember, User.name)
+        .join(User, User.id == HouseholdMember.user_id)
         .where(HouseholdMember.household_id == household_id)
         .order_by(
             HouseholdMember.joined_at,
@@ -278,7 +303,17 @@ def get_household_members(
         )
     )
 
-    return list(db.scalars(statement).all())
+    # Каждая строка результата — пара (участник, имя)
+    return [
+        {
+            "household_id": member.household_id,
+            "user_id": member.user_id,
+            "name": name,
+            "role": member.role,
+            "joined_at": member.joined_at,
+        }
+        for member, name in db.execute(statement).all()
+    ]
 
 
 def get_user_households(
@@ -875,6 +910,128 @@ def get_meal_entries(
     return list(db.scalars(query).all())
 
 
+def get_user_day_bounds(
+    user: User,
+    target_date: date,
+) -> tuple[datetime, datetime]:
+    """Возвращает начало и конец календарного дня в часовом поясе пользователя.
+
+    Аргументы:
+        user        — пользователь; берётся user.timezone, например "Europe/Berlin"
+        target_date — день, например date(2026, 10, 23)
+
+    Результат для этого примера (конец дня не включается):
+        (2026-10-23 00:00 +02:00, 2026-10-24 00:00 +02:00)
+    """
+    user_timezone = ZoneInfo(user.timezone or "UTC")
+
+    start_at = datetime.combine(target_date, time.min, tzinfo=user_timezone)
+    end_at = datetime.combine(
+        target_date + timedelta(days=1),
+        time.min,
+        tzinfo=user_timezone,
+    )
+
+    return start_at, end_at
+
+
+def get_meal_entries_for_day(
+    db: Session,
+    user_id: int,
+    target_date: date,
+) -> list[MealEntry]:
+    """Возвращает приёмы пищи пользователя за календарный день по его часовому поясу.
+
+    Использует те же границы дня, что и дневная сводка, поэтому список и итоги
+    всегда согласованы. Записи идут по времени приёма пищи.
+    """
+    user = db.get(User, user_id)
+
+    if user is None:
+        raise MealEntryUserNotFoundError
+
+    start_at, end_at = get_user_day_bounds(user, target_date)
+
+    statement = (
+        select(MealEntry)
+        .where(
+            MealEntry.user_id == user_id,
+            MealEntry.eaten_at >= start_at,
+            MealEntry.eaten_at < end_at,
+        )
+        .order_by(MealEntry.eaten_at, MealEntry.id)
+    )
+
+    return list(db.scalars(statement).all())
+
+
+def delete_meal_entry(db: Session, user_id: int, entry_id: int) -> None:
+    """Удаляет запись о приёме пищи, если она принадлежит пользователю.
+
+    Чужая и несуществующая запись одинаково дают MealEntryNotFoundError,
+    чтобы нельзя было выяснить, существует ли чужая запись.
+    """
+    entry = db.get(MealEntry, entry_id)
+
+    if entry is None or entry.user_id != user_id:
+        raise MealEntryNotFoundError
+
+    try:
+        db.delete(entry)
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise MealEntrySaveError from exc
+
+
+def delete_weight_record(db: Session, user_id: int, record_id: int) -> None:
+    """Удаляет запись веса, если она принадлежит пользователю."""
+    record = db.get(WeightRecord, record_id)
+
+    if record is None or record.user_id != user_id:
+        raise WeightRecordNotFoundError
+
+    try:
+        db.delete(record)
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise
+
+
+def update_training_session(
+    db: Session,
+    user_id: int,
+    training_session_id: int,
+    changes: dict[str, object],
+) -> TrainingSession:
+    """Меняет статус и/или заметки тренировочной сессии пользователя.
+
+    Аргумент changes — только переданные поля, например {"status": "completed"}.
+    """
+    training_session = db.scalar(
+        select(TrainingSession).where(
+            TrainingSession.id == training_session_id,
+            TrainingSession.user_id == user_id,
+        )
+    )
+
+    if training_session is None:
+        raise TrainingSessionNotFoundError
+
+    try:
+        for field_name, value in changes.items():
+            setattr(training_session, field_name, value)
+
+        db.commit()
+        db.refresh(training_session)
+    except SQLAlchemyError:
+        db.rollback()
+        raise
+
+    return training_session
+
+
 def get_daily_nutrition_summary(
     db: Session,
     user_id: int,
@@ -887,18 +1044,7 @@ def get_daily_nutrition_summary(
         raise MealEntryUserNotFoundError
 
     # Определяем начало и конец дня в часовом поясе пользователя
-    user_timezone = ZoneInfo(user.timezone or "UTC")
-
-    start_at = datetime.combine(
-        target_date,
-        time.min,
-        tzinfo=user_timezone,
-    )
-    end_at = datetime.combine(
-        target_date + timedelta(days=1),
-        time.min,
-        tzinfo=user_timezone,
-    )
+    start_at, end_at = get_user_day_bounds(user, target_date)
 
     # Суммируем калории и БЖУ по записям за выбранный день
     result = db.execute(
@@ -925,3 +1071,87 @@ def get_daily_nutrition_summary(
         "fat_g": result[3],
         "carbs_g": result[4],
     }
+
+
+def delete_goal(db: Session, user_id: int, goal_id: int) -> None:
+    """Удаляет цель навсегда, если она принадлежит пользователю.
+
+    Чужая и несуществующая цель одинаково дают GoalNotFoundError.
+    """
+    goal = db.get(Goal, goal_id)
+
+    if goal is None or goal.user_id != user_id:
+        raise GoalNotFoundError
+
+    try:
+        db.delete(goal)
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise
+
+
+def delete_training_session(
+    db: Session,
+    user_id: int,
+    training_session_id: int,
+) -> None:
+    """Удаляет тренировочную сессию вместе со всеми её блоками.
+
+    Блоки (таблица workouts) ссылаются на сессию, поэтому их нужно удалить первыми.
+    Всё выполняется в одной транзакции: либо удалится всё, либо ничего.
+    """
+    training_session = db.scalar(
+        select(TrainingSession).where(
+            TrainingSession.id == training_session_id,
+            TrainingSession.user_id == user_id,
+        )
+    )
+
+    if training_session is None:
+        raise TrainingSessionNotFoundError
+
+    try:
+        db.execute(
+            delete(Workout).where(Workout.training_session_id == training_session_id)
+        )
+        db.delete(training_session)
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise
+
+
+def delete_workout(
+    db: Session,
+    user_id: int,
+    training_session_id: int,
+    workout_id: int,
+) -> None:
+    """Удаляет один блок тренировки (сессия должна принадлежать пользователю)."""
+    training_session = db.scalar(
+        select(TrainingSession).where(
+            TrainingSession.id == training_session_id,
+            TrainingSession.user_id == user_id,
+        )
+    )
+
+    if training_session is None:
+        raise WorkoutSessionNotFoundError
+
+    workout = db.scalar(
+        select(Workout).where(
+            Workout.id == workout_id,
+            Workout.training_session_id == training_session_id,
+        )
+    )
+
+    if workout is None:
+        raise WorkoutNotFoundError
+
+    try:
+        db.delete(workout)
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise WorkoutSaveError from exc

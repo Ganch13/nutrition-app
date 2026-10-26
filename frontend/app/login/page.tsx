@@ -3,8 +3,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { apiRequest } from "../../api";
-
+import { apiRequest } from "@/lib/api"
+import Link from "next/link"
 type LoginResponse = {
   access_token: string;
   token_type: string;
@@ -114,6 +114,12 @@ export default function LoginPage() {
         >
           {loading ? "Входим..." : "Войти"}
         </button>
+        <p className="text-center text-sm text-zinc-500">
+          Нет аккаунта?{" "}
+          <Link href="/register" className="font-medium text-green-700 hover:underline">
+            Зарегистрироваться
+          </Link>
+        </p>
       </form>
     </main>
   );

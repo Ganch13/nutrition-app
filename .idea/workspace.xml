@@ -4,10 +4,54 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="8f179d62-2dc2-4487-b562-f5ac2bb54382" name="Changes" comment="feat: Добавление frontend главной страницы и страницы авторизации">
+    <list default="true" id="8f179d62-2dc2-4487-b562-f5ac2bb54382" name="Changes" comment="feat: Добавление frontend Выход, подгружение API веса и целей">
+      <change afterPath="$PROJECT_DIR$/backend/.dockerignore" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/backend/Dockerfile" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/backend/access.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/backend/finance_routes.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/backend/finance_services.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/backend/household_routes.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/backend/household_services.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/backend/tests/test_deletions.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/backend/tests/test_finance.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/backend/tests/test_household_management.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/backend/tests/test_ui_endpoints.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/docker-compose.release.yml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/docker-compose.yml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/frontend/.dockerignore" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/frontend/Dockerfile" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/frontend/app/(app)/family/page.tsx" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/frontend/app/(app)/finance/page.tsx" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/frontend/app/(app)/layout.tsx" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/frontend/app/(app)/nutrition/page.tsx" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/frontend/app/(app)/page.tsx" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/frontend/app/(app)/profile/page.tsx" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/frontend/app/(app)/progress/page.tsx" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/frontend/app/(app)/training/page.tsx" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/frontend/app/apple-icon.tsx" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/frontend/app/manifest.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/frontend/app/pwa-icon/route.tsx" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/frontend/app/register/page.tsx" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/frontend/components/AppShell.tsx" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/frontend/components/ui.tsx" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/frontend/lib/api.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/frontend/lib/endpoints.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/frontend/lib/format.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/frontend/lib/profile-context.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/frontend/lib/types.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/frontend/lib/use-async-data.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/api.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/api.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/app/page.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/app/page.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/database.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/database.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/backend/requirements.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/schemas.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/schemas.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/services.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/services.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/tests/helpers.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/tests/helpers.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/api.ts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/app/layout.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/app/layout.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/app/login/page.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/app/login/page.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/app/page.tsx" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -45,10 +89,7 @@
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
   <component name="GitHubPullRequestSearchHistory">{
-  &quot;lastFilter&quot;: {
-    &quot;state&quot;: &quot;OPEN&quot;,
-    &quot;assignee&quot;: &quot;Ganch13&quot;
-  }
+  &quot;lastFilter&quot;: {}
 }</component>
   <component name="GithubPullRequestsUISettings">{
   &quot;selectedUrlAndAccountId&quot;: {
@@ -87,6 +128,8 @@
     "codeWithMe.voiceChat.enabledByDefault": "false",
     "git-widget-placeholder": "develop",
     "git.auto.fetch.suggestion.counter": "1",
+    "node.js.detected.package.jshint": "true",
+    "node.js.selected.package.jshint": "",
     "nodejs_package_manager_path": "npm",
     "settings.editor.selected.configurable": "vcs.log",
     "ts.external.directory.path": "C:\\Users\\user\\PycharmProjects\\nutrition-app\\frontend\\node_modules\\typescript\\lib"
@@ -179,7 +222,15 @@
       <option name="project" value="LOCAL" />
       <updated>1792682365492</updated>
     </task>
-    <option name="localTasksCounter" value="7" />
+    <task id="LOCAL-00007" summary="feat: Добавление frontend Выход, подгружение API веса и целей">
+      <option name="closed" value="true" />
+      <created>1792764176090</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1792764176090</updated>
+    </task>
+    <option name="localTasksCounter" value="8" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -196,6 +247,17 @@
                   <entry key="Show.Git.Branches" value="true" />
                 </map>
               </option>
+              <option name="FILTERS">
+                <map>
+                  <entry key="branch">
+                    <value>
+                      <list>
+                        <option value="master" />
+                      </list>
+                    </value>
+                  </entry>
+                </map>
+              </option>
             </State>
           </value>
         </entry>
@@ -209,6 +271,7 @@
     <MESSAGE value="feat: добавление API для целей, расписания и тренировочных занятий (шаг 25)" />
     <MESSAGE value="feat: Добавление авторизации и проверки пользователей" />
     <MESSAGE value="feat: Добавление frontend главной страницы и страницы авторизации" />
-    <option name="LAST_COMMIT_MESSAGE" value="feat: Добавление frontend главной страницы и страницы авторизации" />
+    <MESSAGE value="feat: Добавление frontend Выход, подгружение API веса и целей" />
+    <option name="LAST_COMMIT_MESSAGE" value="feat: Добавление frontend Выход, подгружение API веса и целей" />
   </component>
 </project>

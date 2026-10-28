@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import FoodPicker from "@/components/FoodPicker";
+import HomeBlockReturn from "@/components/HomeBlockReturn";
 import {
   Button,
   Card,
@@ -10,9 +12,11 @@ import {
   SelectField,
   TextField,
 } from "@/components/ui";
+import PeriodNav from "@/components/PeriodNav";
 import { getErrorText } from "@/lib/api";
 import {
   createMealEntry,
+  createMealFromFood,
   deleteMealEntry,
   getDailyEntries,
   getDailySummary,
@@ -30,7 +34,7 @@ import {
   toOptions,
 } from "@/lib/format";
 import { useProfile } from "@/lib/profile-context";
-import type { MealType } from "@/lib/types";
+import type { Food, MealType } from "@/lib/types";
 import { useAsyncData } from "@/lib/use-async-data";
 
 /** Страница «Питание»: итоги выбранного дня, список приёмов пищи и форма добавления. */
@@ -111,17 +115,18 @@ export default function NutritionPage() {
   return (
     <>
       <PageHeader title="Питание" subtitle={formatDateLong(date)} />
+      <HomeBlockReturn block="nutrition" />
 
-      <div className="mb-6 flex flex-wrap gap-2">
-        <Button variant="secondary" onClick={() => setDate(shiftDate(date, -1))}>
-          ← Предыдущий день
-        </Button>
-        <Button variant="secondary" onClick={() => setDate(today)} disabled={date === today}>
-          Сегодня
-        </Button>
-        <Button variant="secondary" onClick={() => setDate(shiftDate(date, 1))}>
-          Следующий день →
-        </Button>
+      <div className="mb-6">
+        <PeriodNav
+          prevLabel="Предыдущий день"
+          nextLabel="Следующий день"
+          todayLabel="Сегодня"
+          onPrev={() => setDate(shiftDate(date, -1))}
+          onNext={() => setDate(shiftDate(date, 1))}
+          onToday={() => setDate(today)}
+          todayDisabled={date === today}
+        />
       </div>
 
       {day.error && (
@@ -160,7 +165,11 @@ export default function NutritionPage() {
             )}
           </Card>
 
-          <Card title="Добавить приём пищи">
+          <Card title="Добавить из справочника">
+            <FoodMealForm userId={userId} date={date} onAdded={day.reload} />
+          </Card>
+
+          <Card title="Добавить приём пищи вручную">
             <form onSubmit={handleSubmit} className="grid gap-3 sm:grid-cols-2">
               <TextField label="Время" type="time" value={time} onChange={setTime} required />
               <SelectField
@@ -232,5 +241,115 @@ export default function NutritionPage() {
         </Card>
       </div>
     </>
+  );
+}
+
+/**
+ * Добавление приёма пищи из справочника: найти продукт, указать граммы или порции.
+ * Калории и БЖУ показываются сразу (расчёт на экране), а в дневник их записывает сервер.
+ * Аргументы: userId — id пользователя; date — выбранный день "2026-10-27"; onAdded — обновить страницу.
+ */
+function FoodMealForm({ userId, date, onAdded }: { userId: number; date: string; onAdded: () => void }) {
+  const [food, setFood] = useState<Food | null>(null);
+  // "g" — вводим граммы, "serving" — число порций продукта (например, 2 яйца)
+  const [unit, setUnit] = useState<"g" | "serving">("g");
+  const [amount, setAmount] = useState("100");
+  const [time, setTime] = useState(currentTimeValue);
+  const [mealType, setMealType] = useState("lunch");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const servingGrams = food?.serving_grams ? Number(food.serving_grams) : null;
+  const canUseServings = servingGrams !== null;
+  // Масса в граммах: введённая или число порций × масса порции
+  const grams = unit === "serving" && servingGrams !== null ? Number(amount) * servingGrams : Number(amount);
+  // Предварительный расчёт для показа; сохранённые значения всё равно считает сервер
+  const preview = food && grams > 0 ? {
+    calories: (Number(food.calories_per_100g) * grams) / 100,
+    protein: (Number(food.protein_per_100g) * grams) / 100,
+    fat: (Number(food.fat_per_100g) * grams) / 100,
+    carbs: (Number(food.carbs_per_100g) * grams) / 100,
+  } : null;
+
+  /** Выбор продукта: если у него есть порция, по умолчанию считаем порциями. */
+  function handleSelect(selected: Food) {
+    setFood(selected);
+    if (selected.serving_grams) {
+      setUnit("serving");
+      setAmount("1");
+    } else {
+      setUnit("g");
+      setAmount("100");
+    }
+  }
+
+  /** Отправляет запись на сервер. */
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!food) return;
+    setError(null);
+    setSaving(true);
+    try {
+      await createMealFromFood(userId, {
+        food_id: food.id,
+        ...(unit === "serving" ? { servings: Number(amount) } : { amount_g: Number(amount) }),
+        eaten_at: toIsoFromLocal(`${date}T${time}`),
+        meal_type: mealType as MealType,
+        notes: null,
+      });
+      setFood(null);
+      onAdded();
+    } catch (err) {
+      setError(getErrorText(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <FoodPicker onSelect={handleSelect} selectedId={food?.id} />
+
+      {food && (
+        <form onSubmit={handleSubmit} className="space-y-3 rounded-xl bg-slate-50 p-4">
+          <p className="font-medium">{food.name}</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <SelectField
+              label="Единица"
+              value={unit}
+              onChange={(value) => {
+                setUnit(value as "g" | "serving");
+                setAmount(value === "serving" ? "1" : String(Math.round(servingGrams ?? 100)));
+              }}
+              options={[
+                ["g", "Граммы"],
+                ...(canUseServings ? ([["serving", `Порции (${food.serving_name})`]] as [string, string][]) : []),
+              ]}
+            />
+            <TextField
+              label={unit === "serving" ? "Сколько порций" : "Масса, г"}
+              type="number"
+              min={0}
+              step={unit === "serving" ? "0.5" : "1"}
+              value={amount}
+              onChange={setAmount}
+              required
+            />
+            <TextField label="Время" type="time" value={time} onChange={setTime} required />
+            <SelectField label="Тип" value={mealType} onChange={setMealType} options={toOptions(MEAL_TYPE_LABELS)} />
+          </div>
+          {preview && (
+            <p className="text-sm text-slate-600">
+              {formatNumber(grams, 0)} г ≈ {formatNumber(preview.calories, 0)} ккал · Б {formatNumber(preview.protein, 1)} ·
+              Ж {formatNumber(preview.fat, 1)} · У {formatNumber(preview.carbs, 1)}
+            </p>
+          )}
+          <Button type="submit" loading={saving} disabled={!preview}>
+            Добавить в дневник
+          </Button>
+        </form>
+      )}
+      {error && <ErrorBanner message={error} />}
+    </div>
   );
 }

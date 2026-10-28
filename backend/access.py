@@ -1,13 +1,31 @@
 """Общие проверки доступа к домохозяйствам.
 
-Вынесено из main.py, чтобы ими могли пользоваться и main.py, и household_routes.py
-(main подключает роутер, поэтому роутер не должен импортировать main).
+Вынесено из main.py, чтобы ими могли пользоваться и main.py, и файлы *_routes.py
+(main подключает роутеры, поэтому роутеры не должны импортировать main).
 """
 
-from fastapi import HTTPException
+from fastapi import Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from models import Household, HouseholdMember, User
+from security import get_current_user
+
+
+def require_same_user(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+) -> None:
+    """Разрешает доступ только к собственным данным (/users/{user_id}/...).
+
+    Пример: токен принадлежит пользователю 1, запрос идёт на /users/2/goals
+    → ответ 403 «У вас нет доступа к данным этого пользователя».
+    """
+    if current_user.id != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="У вас нет доступа к данным этого пользователя",
+        )
+
 
 
 def require_household_member(

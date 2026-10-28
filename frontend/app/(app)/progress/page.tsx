@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import ProgressPhotos from "@/components/ProgressPhotos";
+import HomeBlockReturn from "@/components/HomeBlockReturn";
 import {
   Badge,
   Button,
@@ -61,11 +63,14 @@ export default function ProgressPage() {
 
   return (
     <>
-      <PageHeader title="Прогресс" subtitle="Вес и цели" />
+      <PageHeader title="Прогресс" subtitle="Вес, цели и фото" />
+      <HomeBlockReturn block="weight" />
       <div className="grid gap-6 xl:grid-cols-2">
         <WeightSection userId={profile.id} today={today} />
         <GoalsSection userId={profile.id} today={today} />
       </div>
+      <h2 className="mb-3 mt-8 text-xl font-bold">Фото прогресса</h2>
+      <ProgressPhotos userId={profile.id} today={today} />
     </>
   );
 }
@@ -165,7 +170,7 @@ function WeightSection({ userId, today }: { userId: number; today: string }) {
                 <p className="font-medium">
                   {formatKg(record.weight_kg)}
                   {delta !== null && delta !== 0 && (
-                    <span className={`ml-2 text-sm ${delta > 0 ? "text-amber-600" : "text-emerald-600"}`}>
+                    <span className={`ml-2 text-sm ${delta > 0 ? "text-amber-600" : "text-good-600"}`}>
                       {delta > 0 ? "+" : ""}
                       {formatNumber(delta, 2)}
                     </span>

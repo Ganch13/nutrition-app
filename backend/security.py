@@ -1,4 +1,6 @@
 from pwdlib import PasswordHash
+import hashlib
+import hmac
 import os
 from datetime import datetime, timedelta, timezone
 import jwt
@@ -26,8 +28,9 @@ if not SECRET_KEY:
 # Алгоритм подписи токенов.
 ALGORITHM = "HS256"
 
-# Срок действия токена — 30 минут.
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+# Срок действия access-токена — 15 минут. Короткий срок ограничивает ущерб, если токен украли;
+# незаметно для человека его продлевает refresh-токен (cookie, см. auth_services.py).
+ACCESS_TOKEN_EXPIRE_MINUTES = 15
 
 # Создаём объект для безопасного хеширования паролей.
 # Библиотека выбирает рекомендуемые настройки алгоритма.
@@ -67,6 +70,27 @@ def create_access_token(
         to_encode,
         SECRET_KEY,
         algorithm=ALGORITHM,
+    )
+
+
+def password_fingerprint(password_hash: str | None) -> str:
+    """Короткий «отпечаток» текущего пароля: 16 символов, например "3fa91c07b2d4e655".
+
+    Кладётся в access-токен (поле "pv"). Пока пароль не менялся, отпечаток тот же; после смены пароля
+    отпечаток другой, и все ранее выданные токены перестают работать сразу, а не через 15 минут.
+    Это HMAC с секретным ключом, поэтому по отпечатку нельзя ничего узнать о хеше пароля.
+    """
+    return hmac.new(
+        SECRET_KEY.encode("utf-8"),
+        (password_hash or "").encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()[:16]
+
+
+def issue_access_token(user: User) -> str:
+    """Access-токен для пользователя: {"sub": "1", "pv": "3fa91c07b2d4e655", "exp": ...}."""
+    return create_access_token(
+        data={"sub": str(user.id), "pv": password_fingerprint(user.password_hash)}
     )
 
 
@@ -127,6 +151,18 @@ def get_current_user(
         raise HTTPException(
             status_code=401,
             detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Токен выдан до смены пароля (или без отпечатка вовсе) — он недействителен
+    token_fingerprint = payload.get("pv")
+    if not isinstance(token_fingerprint, str) or not hmac.compare_digest(
+        token_fingerprint.encode("utf-8"),
+        password_fingerprint(user.password_hash).encode("utf-8"),
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Недействительный или просроченный токен",
             headers={"WWW-Authenticate": "Bearer"},
         )
 

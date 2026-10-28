@@ -1,126 +1,99 @@
-
 "use client";
 
-import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { apiRequest } from "@/lib/api"
-import Link from "next/link"
-type LoginResponse = {
-  access_token: string;
-  token_type: string;
-};
+import { useState, useSyncExternalStore } from "react";
+import AuthLayout from "@/components/AuthLayout";
+import { Button, ErrorBanner, PasswordField, SuccessNotice, TextField } from "@/components/ui";
+import { getErrorText, storeAccessToken } from "@/lib/api";
+import { loginUser } from "@/lib/endpoints";
 
+// Сообщение для страницы входа, оставленное другой страницей (например, «Аккаунт удалён»)
+const NOTICE_KEY = "lad_notice";
+
+/** Читает сообщение из sessionStorage. Вне браузера и при запрете хранилища возвращает null. */
+function readNotice(): string | null {
+  try {
+    return sessionStorage.getItem(NOTICE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+// Сообщение не меняется само, поэтому подписка не нужна
+const subscribeNever = () => () => {};
+
+/** Страница входа: email и пароль (пароль можно показать «глазом» справа). */
 export default function LoginPage() {
   const router = useRouter();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // На сервере сообщения нет (null), в браузере оно читается после загрузки страницы
+  const notice = useSyncExternalStore(subscribeNever, readNotice, () => null);
 
-  async function handleLogin(
-    event: React.FormEvent<HTMLFormElement>,
-  ) {
+  /** Вход: POST /auth/login → сохранить токен → открыть главную. */
+  async function handleLogin(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setError("");
+    setError(null);
     setLoading(true);
 
     try {
-      const data = await apiRequest<LoginResponse>(
-        "/auth/login",
-        {
-          method: "POST",
-          body: JSON.stringify({ email, password }),
-        },
-      );
-
-      sessionStorage.setItem("access_token", data.access_token);
-
+      const data = await loginUser(email.trim(), password);
+      storeAccessToken(data.access_token);
+      try {
+        sessionStorage.removeItem(NOTICE_KEY);
+      } catch {
+        // Не страшно: сообщение просто покажется ещё раз
+      }
       router.push("/");
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Не удалось выполнить вход",
-      );
+      setError(getErrorText(err));
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-zinc-100 px-4">
-      <form
-        onSubmit={handleLogin}
-        className="w-full max-w-md space-y-5 rounded-2xl bg-white p-8 shadow-sm"
-      >
-        <div>
-          <h1 className="text-2xl font-bold text-zinc-900">
-            Вход в приложение
-          </h1>
-          <p className="mt-2 text-sm text-zinc-500">
-            Nutrition & Training Planner
-          </p>
-        </div>
+    <AuthLayout title="Вход" subtitle="Войдите, чтобы увидеть свой день, меню и бюджет.">
+      <form onSubmit={handleLogin} className="space-y-5">
+        {notice && <SuccessNotice message={notice} />}
 
-        <div className="space-y-2">
-          <label
-            htmlFor="email"
-            className="block text-sm font-medium text-zinc-700"
-          >
-            Email
-          </label>
-          <input
-            id="email"
-            type="email"
-            autoComplete="email"
-            required
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-zinc-900 outline-none focus:border-green-600"
-            placeholder="user@example.com"
-          />
-        </div>
+        <TextField
+          label="Email"
+          type="email"
+          autoComplete="email"
+          inputMode="email"
+          autoCapitalize="none"
+          required
+          value={email}
+          onChange={setEmail}
+          placeholder="name@example.com"
+        />
+        <PasswordField
+          label="Пароль"
+          autoComplete="current-password"
+          required
+          value={password}
+          onChange={setPassword}
+          placeholder="Введите пароль"
+        />
 
-        <div className="space-y-2">
-          <label
-            htmlFor="password"
-            className="block text-sm font-medium text-zinc-700"
-          >
-            Пароль
-          </label>
-          <input
-            id="password"
-            type="password"
-            autoComplete="current-password"
-            required
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-zinc-900 outline-none focus:border-green-600"
-            placeholder="Введите пароль"
-          />
-        </div>
+        {error && <ErrorBanner message={error} />}
 
-        {error && (
-          <p role="alert" className="text-sm text-red-600">
-            {error}
-          </p>
-        )}
-
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full rounded-lg bg-green-700 px-4 py-3 font-medium text-white hover:bg-green-800 disabled:opacity-60"
-        >
+        <Button type="submit" loading={loading} className="w-full">
           {loading ? "Входим..." : "Войти"}
-        </button>
-        <p className="text-center text-sm text-zinc-500">
+        </Button>
+
+        <p className="text-center text-sm text-slate-500">
           Нет аккаунта?{" "}
-          <Link href="/register" className="font-medium text-green-700 hover:underline">
-            Зарегистрироваться
+          <Link href="/register" className="font-medium text-brand-700 underline underline-offset-2">
+            Создать аккаунт
           </Link>
         </p>
       </form>
-    </main>
+    </AuthLayout>
   );
 }

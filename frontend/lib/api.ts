@@ -23,11 +23,89 @@ export function getErrorText(error: unknown): string {
   return error instanceof Error ? error.message : "Неизвестная ошибка";
 }
 
-/** Удаляет токен и отправляет пользователя на страницу входа. */
-export function logout(): void {
-  sessionStorage.removeItem("access_token");
-  window.location.assign("/login");
+const TOKEN_KEY = "access_token";
+
+/** Сохраненный в этой вкладке access-токен (живёт 15 минут) или null. */
+export function getAccessToken(): string | null {
+  return typeof window !== "undefined" ? sessionStorage.getItem(TOKEN_KEY) : null;
 }
+
+/** Запоминает access-токен после входа, регистрации, обновления сессии или смены пароля. */
+export function storeAccessToken(token: string): void {
+  sessionStorage.setItem(TOKEN_KEY, token);
+}
+
+/**
+ * Завершает сессию: просит сервер погасить её, убирает токен и открывает указанную страницу (по умолчанию вход).
+ * Долгоживущая часть сессии лежит в HttpOnly-cookie, которую скрипт удалить не может, поэтому нужен запрос к серверу.
+ * Если сервер недоступен, всё равно выходим (токен в этой вкладке удалён, сессия на сервере истечёт сама).
+ * Пример: endSession("/login").
+ */
+export function endSession(redirectTo: string): void {
+  sessionStorage.removeItem(TOKEN_KEY);
+
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    window.location.assign(redirectTo);
+  };
+  // Не ждём сервер дольше 2 секунд: выход не должен зависать
+  window.setTimeout(finish, 2000);
+  fetch(`${API_URL}/auth/logout`, { method: "POST", credentials: "include" })
+    .catch(() => undefined)
+    .finally(finish);
+}
+
+/** Выход из аккаунта (кнопка «Выйти»): endSession со страницей входа. Подходит для onClick={logout}. */
+export function logout(): void {
+  endSession("/login");
+}
+
+/** Результат попытки продлить сессию: получили токен / сессии нет (нужен вход) / сервер недоступен. */
+type RefreshResult = "ok" | "expired" | "unavailable";
+
+// Идущий сейчас запрос на обновление: если несколько запросов страницы одновременно получили 401,
+// обновление выполняется один раз, а остальные ждут его результата.
+let refreshInFlight: Promise<RefreshResult> | null = null;
+
+/**
+ * Обменивает cookie сессии на новый access-токен (POST /auth/refresh) и сохраняет его.
+ * Результат "expired" означает, что cookie нет или она недействительна: нужно войти заново.
+ * Сетевая ошибка и ответы сервера 5xx/429 дают "unavailable": человека при этом не разлогиниваем.
+ */
+export function refreshSession(): Promise<RefreshResult> {
+  if (refreshInFlight === null) {
+    refreshInFlight = (async (): Promise<RefreshResult> => {
+      try {
+        const response = await fetch(`${API_URL}/auth/refresh`, {
+          method: "POST",
+          credentials: "include",
+          // Без ограничения по времени плохая связь оставила бы приложение на экране загрузки навсегда
+          signal: requestTimeout({}),
+        });
+        if (response.status === 401 || response.status === 403) return "expired";
+        if (!response.ok) return "unavailable";
+        const data: unknown = await response.json();
+        const token =
+          typeof data === "object" && data !== null
+            ? (data as { access_token?: unknown }).access_token
+            : undefined;
+        if (typeof token !== "string") return "unavailable";
+        storeAccessToken(token);
+        return "ok";
+      } catch {
+        return "unavailable";
+      } finally {
+        refreshInFlight = null;
+      }
+    })();
+  }
+  return refreshInFlight;
+}
+
+/** Адреса, которые работают без входа или сами управляют сессией: для них токен не требуется и не обновляется. */
+const SESSION_FREE_PATHS = ["/auth/login", "/auth/register", "/auth/refresh", "/auth/logout"];
 
 const CYRILLIC = /[А-Яа-яЁё]/;
 
@@ -85,19 +163,27 @@ function buildMessage(status: number, responseText: string, path: string): strin
 }
 
 /**
- * Выполняет запрос к backend и возвращает данные нужного типа T.
- *
- * Аргументы: path — например "/users/me"; options — метод, тело и т. п.
- * Токен берётся из sessionStorage и добавляется автоматически.
- * При ответе 401 (кроме запроса входа) токен удаляется, пользователь
- * отправляется на /login. Ошибки выбрасываются как ApiError.
+ * Отправляет запрос к backend и возвращает «сырой» ответ Response.
+ * Подставляет токен и превращает ошибки в ApiError. Если токена нет (новая вкладка) или он истёк (ответ 401),
+ * один раз тихо продлевает сессию по cookie и повторяет запрос; если сессии нет, отправляет на страницу входа.
+ * Её используют apiRequest (JSON) и apiBlob (файлы).
  */
-export async function apiRequest<T>(
+async function sendRequest(
   path: string,
-  options: RequestInit = {},
-): Promise<T> {
-  const token =
-    typeof window !== "undefined" ? sessionStorage.getItem("access_token") : null;
+  options: RequestInit,
+  alreadyRetried = false,
+): Promise<Response> {
+  const needsSession = !SESSION_FREE_PATHS.includes(path) && typeof window !== "undefined";
+
+  // Токена в этой вкладке нет (вкладку открыли заново или перезапустили браузер): пробуем восстановить сессию
+  if (needsSession && getAccessToken() === null) {
+    const restored = await refreshSession();
+    if (restored === "unavailable") throw serverUnavailable();
+    if (restored === "expired") {
+      logout();
+      throw new ApiError(401, "Сессия истекла. Войдите снова.");
+    }
+  }
 
   const headers = new Headers(options.headers);
 
@@ -105,34 +191,74 @@ export async function apiRequest<T>(
     headers.set("Content-Type", "application/json");
   }
 
+  const token = getAccessToken();
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
 
   let response: Response;
   try {
-    response = await fetch(`${API_URL}${path}`, { ...options, headers });
+    // credentials: "include" нужен, чтобы браузер принимал и отправлял cookie сессии,
+    // когда frontend и backend открыты на разных адресах (localhost:3000 и localhost:8000)
+    response = await fetch(`${API_URL}${path}`, {
+      ...options,
+      headers,
+      credentials: "include",
+      signal: options.signal ?? requestTimeout(options),
+    });
   } catch {
     // fetch выбрасывает ошибку, если сервер недоступен или запрос заблокирован
-    throw new ApiError(
-      0,
-      "Не удаётся связаться с сервером. Проверьте, что backend запущен.",
-    );
+    throw serverUnavailable();
+  }
+
+  // Токен истёк: продлеваем сессию и повторяем запрос ровно один раз
+  if (response.status === 401 && needsSession && !alreadyRetried) {
+    const renewed = await refreshSession();
+    if (renewed === "ok") return sendRequest(path, options, true);
+    if (renewed === "unavailable") throw serverUnavailable();
   }
 
   if (!response.ok) {
     const message = buildMessage(response.status, await response.text(), path);
 
-    if (
-      response.status === 401 &&
-      path !== "/auth/login" &&
-      typeof window !== "undefined"
-    ) {
+    if (response.status === 401 && needsSession) {
       logout();
     }
 
     throw new ApiError(response.status, message);
   }
+
+  return response;
+}
+
+function serverUnavailable(): ApiError {
+  return new ApiError(0, "Нет связи с сервером. Проверьте интернет и повторите попытку.");
+}
+
+/**
+ * Ограничение по времени для запроса: если сервер молчит дольше, запрос прерывается, и человек видит ошибку
+ * с кнопкой «Повторить», а не бесконечную загрузку (так бывает на плохой мобильной связи).
+ * Загрузка файлов (фото) идёт дольше, поэтому ей даётся больше времени.
+ */
+function requestTimeout(options: RequestInit): AbortSignal | undefined {
+  if (typeof AbortSignal === "undefined" || typeof AbortSignal.timeout !== "function") return undefined;
+  const isUpload = options.body instanceof Blob || options.body instanceof ArrayBuffer;
+  return AbortSignal.timeout(isUpload ? 120_000 : 30_000);
+}
+
+/**
+ * Выполняет запрос к backend и возвращает данные нужного типа T.
+ *
+ * Аргументы: path — например "/users/me"; options — метод, тело и т. п.
+ * Токен берётся из sessionStorage и добавляется автоматически; просроченный токен
+ * обновляется незаметно (см. sendRequest). Если сессия закончилась, пользователь
+ * отправляется на /login. Ошибки выбрасываются как ApiError.
+ */
+export async function apiRequest<T>(
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
+  const response = await sendRequest(path, options);
 
   // 204 No Content: тела нет (например, после удаления)
   if (response.status === 204) {
@@ -140,4 +266,14 @@ export async function apiRequest<T>(
   }
 
   return response.json() as Promise<T>;
+}
+
+/**
+ * Скачивает файл (например, фото) с токеном и возвращает его как Blob.
+ * Нужна, потому что <img src> не умеет отправлять заголовок Authorization.
+ * Пример: apiBlob("/users/1/progress-photos/3/file") → Blob image/jpeg.
+ */
+export async function apiBlob(path: string): Promise<Blob> {
+  const response = await sendRequest(path, {});
+  return response.blob();
 }

@@ -4,11 +4,24 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .env
+backend/uploads/
 
 # --- Node / frontend ---
 node_modules/
 .next/
 .env.local
+tsconfig.tsbuildinfo
+
+# --- Сервер и резервные копии: секреты и данные не должны попадать в Git ---
+deploy/.env
+*.dump
+*.sha256
+*.tar
+*.tar.gz
+backups/
+
+# --- Временные папки ---
+_claude_tmp/
 
 # --- IDE ---
 .idea/

@@ -3,9 +3,11 @@ from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from models import MealEntry, Workout, TrainingSession, ScheduleEvent, ScheduleEvent, Goal, Household, HouseholdMember, User, WeightRecord
 from schemas import  LoginRequest, RegisterRequest, MealEntryCreate, WorkoutUpdate, WorkoutCreate, TrainingSessionCreate, ScheduleEventCreate, GoalCreate, UserCreate, WeightRecordCreate
 from sqlalchemy import select, case, func, delete
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
+from functools import lru_cache
 from security import hash_password, verify_password
+from schedule_services import check_overlaps
 
 
 
@@ -50,6 +52,24 @@ class WorkoutTimeOutsideSessionError(Exception):
 
 class WorkoutSaveError(Exception):
     # Не получилось сохранить блок в базе данных
+    pass
+
+
+class WorkoutOverlapError(Exception):
+    """Новый блок пересекается по времени с другим блоком, не объединённым в суперсет.
+
+    В message лежит готовый для пользователя текст, например:
+    «Блок «Жим лёжа» идёт 22:30–22:45. Следующий блок можно начать в 22:45
+    или позже либо объединить блоки в суперсет.»
+    """
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
+
+class WorkoutSupersetTargetError(Exception):
+    # Блок, с которым просят объединить новый, не найден в этой сессии
     pass
 
 
@@ -162,8 +182,19 @@ def register_user(db, registration_data: RegisterRequest):
 
 
 
+@lru_cache(maxsize=1)
+def _dummy_password_hash() -> str:
+    """Хеш-заглушка: на ней «проверяется» пароль, когда пользователя с таким email нет."""
+    return hash_password("пароль-заглушка-для-выравнивания-времени")
+
+
 def authenticate_user(db, login_data: LoginRequest):
-    """Находит пользователя и проверяет введённый пароль."""
+    """Находит пользователя и проверяет введённый пароль.
+
+    Время ответа не должно выдавать, есть ли такой email: проверка пароля (медленная по замыслу) выполняется
+    всегда, а для неизвестного email сверка идёт с хешем-заглушкой. Иначе по скорости ответа можно
+    было бы узнать, какие адреса зарегистрированы.
+    """
 
     # Email приводим к тому же регистру, что и при регистрации.
     email = str(login_data.email).strip().lower()
@@ -174,18 +205,14 @@ def authenticate_user(db, login_data: LoginRequest):
         .first()
     )
 
-    # Одинаковая ошибка для неизвестного email и неверного пароля.
-    if user is None or user.password_hash is None:
-        raise InvalidCredentialsError
+    known_hash = user.password_hash if user is not None else None
+    password_ok = verify_password(login_data.password, known_hash or _dummy_password_hash())
 
-    if not verify_password(login_data.password, user.password_hash):
+    # Одинаковая ошибка для неизвестного email и неверного пароля.
+    if user is None or known_hash is None or not password_ok:
         raise InvalidCredentialsError
 
     return user
-
-
-
-
 
 
 
@@ -232,47 +259,6 @@ def create_household(
 
 
 
-
-def add_household_member(
-    db: Session,
-    household_id: int,
-    user_id: int,
-) -> HouseholdMember:
-    household = db.get(Household, household_id)
-
-    if household is None:
-        raise HouseholdNotFoundError()
-
-
-    user = db.get(User, user_id)
-
-    if user is None:
-        raise UserNotFoundError()
-
-    existing_member = db.get(
-        HouseholdMember,
-        (household_id, user_id),
-    )
-
-    if existing_member is not None:
-        raise HouseholdMemberAlreadyExistsError()
-
-    member = HouseholdMember(
-        household_id=household_id,
-        user_id=user_id,
-        role="member",
-    )
-
-    try:
-        db.add(member)
-        db.commit()
-        db.refresh(member)
-
-    except SQLAlchemyError:
-        db.rollback()
-        raise
-
-    return member
 
 def get_household_members(
     db: Session,
@@ -578,6 +564,13 @@ def create_schedule_event(
     if user is None:
         raise UserNotFoundError()
 
+    # Два события не могут идти одновременно, если одно не вложено в блок-контейнер
+    check_overlaps(
+        db,
+        user_id,
+        [(event_data.title, event_data.start_at, event_data.end_at, event_data.is_container)],
+    )
+
     # Создаём событие, привязанное к пользователю
     event = ScheduleEvent(
         user_id=user_id,
@@ -738,11 +731,64 @@ def create_workout(
     ):
         raise WorkoutTimeOutsideSessionError
 
+    # Поле superset_with_workout_id не колонка таблицы, поэтому отделяем его от остальных данных
+    fields = workout_data.model_dump()
+    superset_with_id = fields.pop("superset_with_workout_id")
+
+    # Блоки, которые уже есть в этой сессии
+    existing_workouts = list(
+        db.scalars(
+            select(Workout).where(Workout.training_session_id == training_session_id)
+        ).all()
+    )
+
+    # Суперсет: находим блок-партнёра и определяем общий номер группы.
+    # Пример: у партнёра группы ещё нет, другие группы в сессии 1 и 2 → новая группа 3.
+    superset_partner = None
+    group = None
+    if superset_with_id is not None:
+        superset_partner = next(
+            (w for w in existing_workouts if w.id == superset_with_id), None
+        )
+        if superset_partner is None:
+            raise WorkoutSupersetTargetError
+        group = superset_partner.superset_group or (
+            max((w.superset_group or 0 for w in existing_workouts), default=0) + 1
+        )
+
+    # Правило времени: блок не должен пересекаться с другими блоками сессии,
+    # кроме блоков своего суперсета. Если у блока «Жим» время 22:30–22:45,
+    # следующий блок может начаться в 22:45 (вплотную) или позже, но не в 22:30.
+    conflicts = [
+        other
+        for other in existing_workouts
+        if other is not superset_partner
+        and not (group is not None and other.superset_group == group)
+        and workout_data.start_at < other.end_at
+        and workout_data.end_at > other.start_at
+    ]
+    if conflicts:
+        user = db.get(User, user_id)
+        tz = ZoneInfo(user.timezone if user is not None else "UTC")
+        first = min(conflicts, key=lambda w: w.start_at)
+        free_from = max(w.end_at for w in conflicts).astimezone(tz)
+        raise WorkoutOverlapError(
+            f"Блок «{first.name}» идёт "
+            f"{first.start_at.astimezone(tz):%H:%M}–{first.end_at.astimezone(tz):%H:%M}. "
+            f"Следующий блок можно начать в {free_from:%H:%M} или позже, "
+            f"либо объедините блоки в суперсет."
+        )
+
     # Создаём объект блока тренировки
     workout = Workout(
         training_session_id=training_session_id,
-        **workout_data.model_dump(),
+        superset_group=group,
+        **fields,
     )
+
+    # Партнёр по суперсету получает тот же номер группы, если у него его не было
+    if superset_partner is not None and superset_partner.superset_group is None:
+        superset_partner.superset_group = group
 
     try:
         # Добавляем блок в сессию базы данных
@@ -822,10 +868,23 @@ def update_workout(
     # Получаем только те поля, которые клиент действительно передал
     update_data = workout_data.model_dump(exclude_unset=True)
 
+    # completed — не колонка, а команда кнопки «Выполнил упражнение»
+    completed = update_data.pop("completed", None)
+
     try:
         # Обновляем переданные значения
         for field, value in update_data.items():
             setattr(workout, field, value)
+
+        if completed is True:
+            # Не указана фактическая интенсивность — считаем, что выполнено по плану
+            if workout.actual_intensity is None:
+                workout.actual_intensity = workout.planned_intensity
+            # Время отметки не перезаписываем при повторном нажатии
+            if workout.completed_at is None:
+                workout.completed_at = datetime.now(timezone.utc)
+        elif completed is False:
+            workout.completed_at = None
 
         # Сохраняем изменения в PostgreSQL
         db.commit()

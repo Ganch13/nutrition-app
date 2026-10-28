@@ -16,11 +16,28 @@ from sqlalchemy.orm import sessionmaker
 from database import get_db
 from main import app
 from models import Base
+from rate_limit import reset_all_limits
 
 TEST_DATABASE_URL = os.getenv(
     "TEST_DATABASE_URL",
     "postgresql+psycopg2://nutrition:nutrition_pass@localhost:5432/nutrition_test",
 )
+
+
+@pytest.fixture(autouse=True)
+def upload_dir(tmp_path, monkeypatch):
+    """Загружаемые файлы (фото) в тестах пишутся во временную папку, а не в настоящую uploads."""
+    folder = tmp_path / "uploads"
+    monkeypatch.setenv("UPLOAD_DIR", str(folder))
+    return folder
+
+
+@pytest.fixture(autouse=True)
+def fresh_rate_limits():
+    """Счётчики попыток входа/регистрации обнуляются перед каждым тестом, иначе тесты влияли бы друг на друга."""
+    reset_all_limits()
+    yield
+    reset_all_limits()
 
 
 @pytest.fixture(scope="session")

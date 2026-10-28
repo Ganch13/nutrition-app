@@ -1,26 +1,245 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/*
+ * Оформление приложения «Лад».
+ *
+ * Как это устроено. Страницы написаны на Tailwind: классы вроде `text-slate-500` или `bg-brand-600`
+ * берут цвета из переменных ниже. Поменяв значение здесь, вы меняете цвет во всём приложении сразу,
+ * не трогая страницы. Подробно про выбор цветов и шрифтов: файл DESIGN.md рядом с package.json.
+ */
+
+/* ---- Шрифты: лежат в public/fonts, грузятся с вашего же сервера (никаких Google Fonts) ---- */
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/Inter-Regular.woff") format("woff");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/Inter-Medium.woff") format("woff");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/Inter-SemiBold.woff") format("woff");
+  font-weight: 600 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Lora";
+  src: url("/fonts/Lora-Variable.woff") format("woff");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+@theme {
+  /* Шрифты: Inter для интерфейса, Lora для заголовков и крупных сумм */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Lora", ui-serif, Georgia, "Times New Roman", serif;
+
+  /* Основной цвет «индиго» (кнопки, ссылки, выбранный пункт). В коде он называется brand */
+  --color-brand-50: #eef0fd;
+  --color-brand-100: #e0e4fb;
+  --color-brand-200: #c5ccf6;
+  --color-brand-300: #a3aeee;
+  --color-brand-400: #7c8ae3;
+  --color-brand-500: #5967d6;
+  --color-brand-600: #4552c8;
+  --color-brand-700: #3640a8;
+  --color-brand-800: #2b3485;
+  --color-brand-900: #212868;
+  --color-brand-950: #181d4d;
+
+  /* Единственный акцент «шафран»: точка «сегодня» и «вы здесь» */
+  --color-saffron: #f2a22e;
+
+  /* Нейтральные цвета: текст, рамки, фоны. Чуть синеватые, чтобы дружить с индиго */
+  --color-slate-50: #f6f7fb;
+  --color-slate-100: #eceef6;
+  --color-slate-200: #dfe2ee;
+  --color-slate-300: #c6cadb;
+  --color-slate-400: #6a7190;
+  --color-slate-500: #5c6382;
+  --color-slate-600: #454c6b;
+  --color-slate-700: #343a57;
+  --color-slate-800: #252a45;
+  --color-slate-900: #1a1e3a;
+
+  /* Рамка полей ввода: темнее обычной, чтобы поле было видно (контраст 3:1) */
+  --color-field: #878ea9;
+
+  /* «Хорошо»: доходы, выполнено, всё в порядке */
+  --color-good-50: #e8f6f0;
+  --color-good-100: #cbebdc;
+  --color-good-500: #1e9e6f;
+  --color-good-600: #168259;
+  --color-good-700: #11694a;
+  --color-good-800: #0e523b;
+
+  /* «Плохо»: расходы сверх плана, ошибки, опасные действия */
+  --color-red-50: #fdecef;
+  --color-red-100: #fad3da;
+  --color-red-200: #f4b0bc;
+  --color-red-500: #d93b58;
+  --color-red-600: #c22d49;
+  --color-red-700: #a02440;
+
+  /* «Внимание»: предупреждения (тот же шафран, но темнее для текста) */
+  --color-amber-50: #fef5e3;
+  --color-amber-100: #fce8be;
+  --color-amber-200: #f8d486;
+  --color-amber-500: #f2a22e;
+  --color-amber-600: #d98613;
+  --color-amber-700: #9c5d09;
+  --color-amber-800: #7a4708;
+
+  /* Скругления: поля и кнопки мельче, карточки крупнее, «герои» ещё крупнее */
+  --radius-lg: 0.625rem;
+  --radius-xl: 0.875rem;
+  --radius-2xl: 1.25rem;
+  --radius-3xl: 1.75rem;
 }
 
-@media (prefers-color-scheme: dark) {
+/*
+ * Базовые стили лежат в слоях (@layer): так классы Tailwind на странице (например, `font-bold`)
+ * всегда могут их переопределить. Стили вне слоёв перебивали бы классы, и страницы вели бы себя странно.
+ */
+@layer base {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --app-bg: #f4f5fb;
+    color-scheme: light;
+  }
+
+  html {
+    background: var(--app-bg);
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    min-height: 100dvh;
+    background: var(--app-bg);
+    color: var(--color-slate-900);
+    font-family: var(--font-sans);
+    font-size: 16px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Заголовки набираются шрифтом Lora */
+  h1,
+  h2 {
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+  }
+
+  /* Видимый фокус для клавиатуры */
+  :focus-visible {
+    outline: 2px solid var(--color-brand-500);
+    outline-offset: 2px;
+  }
+
+  /* Быстрые нажатия по кнопкам на телефоне не должны приближать страницу */
+  button {
+    touch-action: manipulation;
+  }
+
+  /* У поля пароля есть собственный «глаз» (components/ui.tsx); встроенный глаз Edge прячем, чтобы не было двух */
+  input::-ms-reveal,
+  input::-ms-clear {
+    display: none;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@layer components {
+  /* Суммы и числа в колонках: цифры одной ширины, чтобы столбец не «плясал» */
+  .num {
+    font-variant-numeric: tabular-nums lining-nums;
+  }
+
+  /* Крупные суммы и показатели набираются шрифтом Lora */
+  .figure {
+    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    font-variant-numeric: lining-nums;
+  }
+}
+
+/* ---- Загрузочный экран ---- */
+@keyframes lad-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.18);
+    opacity: 0.75;
+  }
+}
+@keyframes lad-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes lad-track {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(260%);
+  }
+}
+
+.lad-dot {
+  animation: lad-breathe 1.8s ease-in-out infinite;
+  transform-origin: center;
+  transform-box: fill-box;
+}
+.lad-rise {
+  animation: lad-rise 0.5s ease-out both;
+}
+.lad-track {
+  animation: lad-track 1.6s ease-in-out infinite;
+}
+
+/* ---- Панель, выезжающая сбоку (форма события в расписании) ---- */
+@keyframes lad-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.lad-slide-in {
+  animation: lad-slide-in 0.2s ease-out both;
+}
+
+/* Люди, которым неприятна анимация, видят спокойный экран без движения */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

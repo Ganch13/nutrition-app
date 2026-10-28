@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import HomeBlockReturn from "@/components/HomeBlockReturn";
 import {
   Badge,
   Button,
@@ -37,7 +38,7 @@ import {
   toOptions,
 } from "@/lib/format";
 import { useProfile } from "@/lib/profile-context";
-import type { Intensity, LoadType, TrainingSession, TrainingSessionStatus } from "@/lib/types";
+import type { Intensity, LoadType, TrainingSession, TrainingSessionStatus, Workout } from "@/lib/types";
 import { useAsyncData } from "@/lib/use-async-data";
 
 /** Страница «Тренировки»: создание сессии и список сессий с блоками. */
@@ -88,6 +89,7 @@ export default function TrainingPage() {
   return (
     <>
       <PageHeader title="Тренировки" subtitle="Сессии и их блоки" />
+      <HomeBlockReturn block="training" />
 
       <div className="grid gap-6 xl:grid-cols-2">
         <Card title="Новая тренировка">
@@ -202,26 +204,83 @@ function SessionCard({
         </Button>
       </div>
 
-      {expanded && <WorkoutsPanel session={session} userId={userId} />}
+      {expanded && (
+        <WorkoutsPanel
+          session={session}
+          userId={userId}
+          onCompleteSession={() => handleStatus("completed")}
+        />
+      )}
     </Card>
   );
 }
 
-/** Блоки внутри сессии: список с фактической интенсивностью и форма добавления. */
-function WorkoutsPanel({ session, userId }: { session: TrainingSession; userId: number }) {
+// Длительность нового блока по умолчанию, минут
+const DEFAULT_BLOCK_MINUTES = 15;
+
+/**
+ * Предлагает время нового блока: начало — конец последнего блока сессии
+ * (или начало сессии, если блоков нет), длительность 15 минут, но не позже конца сессии.
+ * Пример: блоки заканчиваются в 22:45, сессия до 23:30 → { start: 22:45, end: 23:00 }.
+ */
+function suggestBlockTimes(session: TrainingSession, workouts: Workout[] | null): { start: Date; end: Date } {
+  const sessionEnd = new Date(session.end_at);
+  let start = new Date(session.start_at);
+  for (const workout of workouts ?? []) {
+    const workoutEnd = new Date(workout.end_at);
+    if (workoutEnd > start) start = workoutEnd;
+  }
+  const end = new Date(Math.min(start.getTime() + DEFAULT_BLOCK_MINUTES * 60_000, sessionEnd.getTime()));
+  return { start, end };
+}
+
+/**
+ * Блоки внутри сессии: список, кнопка «Выполнил упражнение» и форма добавления.
+ * Правило времени: новый блок не может начаться раньше окончания предыдущего,
+ * кроме блоков одного суперсета (их выполняют вперемежку). Проверку делает backend,
+ * а форма заранее подставляет правильное время.
+ */
+function WorkoutsPanel({
+  session,
+  userId,
+  onCompleteSession,
+}: {
+  session: TrainingSession;
+  userId: number;
+  onCompleteSession: () => void;
+}) {
   const load = useCallback(() => getWorkouts(userId, session.id), [userId, session.id]);
   const { data: workouts, loading, error, reload } = useAsyncData(load);
 
-  // Время блока по умолчанию совпадает со временем сессии (блок обязан лежать внутри неё)
   const [name, setName] = useState("");
   const [loadType, setLoadType] = useState("strength");
   const [planned, setPlanned] = useState("moderate");
-  const [start, setStart] = useState(() => localInputValue(new Date(session.start_at)));
-  const [end, setEnd] = useState(() => localInputValue(new Date(session.end_at)));
+  // Значения, которые пользователь изменил вручную; null — берём подсказку
+  const [startInput, setStartInput] = useState<string | null>(null);
+  const [endInput, setEndInput] = useState<string | null>(null);
+  // id блока, с которым объединяем в суперсет ("" — не объединяем)
+  const [supersetWith, setSupersetWith] = useState("");
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  /** Добавляет блок в сессию. Сервер проверяет, что время внутри сессии. */
+  const suggested = suggestBlockTimes(session, workouts);
+  const start = startInput ?? localInputValue(suggested.start);
+  const end = endInput ?? localInputValue(suggested.end);
+
+  /** Выбор партнёра по суперсету: время нового блока берём таким же, как у партнёра. */
+  function handleSupersetChange(value: string) {
+    setSupersetWith(value);
+    const partner = workouts?.find((workout) => String(workout.id) === value);
+    if (partner) {
+      setStartInput(localInputValue(new Date(partner.start_at)));
+      setEndInput(localInputValue(new Date(partner.end_at)));
+    } else {
+      setStartInput(null);
+      setEndInput(null);
+    }
+  }
+
+  /** Добавляет блок в сессию. Если время занято другим блоком, backend ответит 409 с подсказкой. */
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError(null);
@@ -240,8 +299,13 @@ function WorkoutsPanel({ session, userId }: { session: TrainingSession; userId: 
         start_at: toIsoFromLocal(start),
         end_at: toIsoFromLocal(end),
         notes: null,
+        superset_with_workout_id: supersetWith === "" ? null : Number(supersetWith),
       });
+      // Сбрасываем форму: следующий блок снова предложит время после только что добавленного
       setName("");
+      setStartInput(null);
+      setEndInput(null);
+      setSupersetWith("");
       reload();
     } catch (err) {
       setFormError(getErrorText(err));
@@ -262,7 +326,22 @@ function WorkoutsPanel({ session, userId }: { session: TrainingSession; userId: 
       setFormError(getErrorText(err));
     }
   }
-    /** Удаляет один блок после подтверждения. */
+
+  /**
+   * Кнопка «Выполнил упражнение» (done = true) или «Снять отметку» (done = false).
+   * Если фактическая интенсивность не выбрана, backend ставит плановую.
+   */
+  async function handleDone(workoutId: number, done: boolean) {
+    setFormError(null);
+    try {
+      await updateWorkout(userId, session.id, workoutId, { completed: done });
+      reload();
+    } catch (err) {
+      setFormError(getErrorText(err));
+    }
+  }
+
+  /** Удаляет один блок после подтверждения. */
   async function handleDeleteWorkout(workoutId: number) {
     if (!window.confirm("Удалить блок?")) return;
     setFormError(null);
@@ -277,28 +356,64 @@ function WorkoutsPanel({ session, userId }: { session: TrainingSession; userId: 
   // Варианты фактической интенсивности: «не указана» + три уровня
   const actualOptions: [string, string][] = [["", "Не указана"], ...toOptions(INTENSITY_LABELS)];
 
+  // Варианты для суперсета: «нет» + все блоки сессии
+  const supersetOptions: [string, string][] = [
+    ["", "Не объединять"],
+    ...(workouts ?? []).map((workout): [string, string] => [
+      String(workout.id),
+      `${workout.name} (${formatTime(workout.start_at)}–${formatTime(workout.end_at)})`,
+    ]),
+  ];
+
+  // Все блоки выполнены, а сама тренировка ещё «запланирована» — предлагаем закрыть её
+  const allDone =
+    session.status === "planned" && !!workouts && workouts.length > 0 && workouts.every((w) => w.completed_at);
+
   return (
     <div className="mt-4 space-y-4 border-t border-slate-100 pt-4">
       {error && <ErrorBanner message={error} onRetry={reload} />}
       {loading && workouts === null && <Loading />}
       {workouts?.length === 0 && <p className="text-sm text-slate-500">Блоков пока нет.</p>}
 
+      {allDone && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-good-50 px-4 py-3 text-sm text-good-700">
+          <span>Все блоки выполнены. Отметить тренировку выполненной?</span>
+          <Button onClick={onCompleteSession}>Тренировка выполнена</Button>
+        </div>
+      )}
+
       {workouts?.map((workout) => (
-        <div key={workout.id} className="rounded-xl bg-slate-50 p-3">
-          <p className="font-medium">{workout.name}</p>
+        <div
+          key={workout.id}
+          className={`rounded-xl p-3 ${workout.completed_at ? "bg-good-50" : "bg-slate-50"}`}
+        >
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <p className="font-medium">{workout.name}</p>
+            <div className="flex flex-wrap gap-1.5">
+              {workout.superset_group !== null && <Badge tone="amber">Суперсет {workout.superset_group}</Badge>}
+              {workout.completed_at && <Badge tone="green">Выполнено в {formatTime(workout.completed_at)}</Badge>}
+            </div>
+          </div>
           <p className="text-sm text-slate-500">
             {LOAD_TYPE_LABELS[workout.load_type]} · план: {INTENSITY_LABELS[workout.planned_intensity]} ·{" "}
             {formatTime(workout.start_at)}–{formatTime(workout.end_at)}
           </p>
-          <div className="mt-2 max-w-xs">
-            <SelectField
-              label="Фактическая интенсивность"
-              value={workout.actual_intensity ?? ""}
-              onChange={(value) => handleActual(workout.id, value)}
-              options={actualOptions}
-            />
-          </div>
-          <div className="mt-2">
+          <div className="mt-2 flex flex-wrap items-end gap-3">
+            <div className="w-full max-w-xs">
+              <SelectField
+                label="Фактическая интенсивность"
+                value={workout.actual_intensity ?? ""}
+                onChange={(value) => handleActual(workout.id, value)}
+                options={actualOptions}
+              />
+            </div>
+            {workout.completed_at ? (
+              <Button variant="secondary" onClick={() => handleDone(workout.id, false)}>
+                Снять отметку
+              </Button>
+            ) : (
+              <Button onClick={() => handleDone(workout.id, true)}>Выполнил упражнение</Button>
+            )}
             <Button variant="danger" onClick={() => handleDeleteWorkout(workout.id)}>
               Удалить блок
             </Button>
@@ -317,8 +432,22 @@ function WorkoutsPanel({ session, userId }: { session: TrainingSession; userId: 
           onChange={setPlanned}
           options={toOptions(INTENSITY_LABELS)}
         />
-        <TextField label="Начало" type="datetime-local" value={start} onChange={setStart} required />
-        <TextField label="Окончание" type="datetime-local" value={end} onChange={setEnd} required />
+        <TextField label="Начало" type="datetime-local" value={start} onChange={setStartInput} required />
+        <TextField label="Окончание" type="datetime-local" value={end} onChange={setEndInput} required />
+        {(workouts?.length ?? 0) > 0 && (
+          <div className="sm:col-span-2">
+            <SelectField
+              label="Суперсет (выполняется вперемежку с другим блоком)"
+              value={supersetWith}
+              onChange={handleSupersetChange}
+              options={supersetOptions}
+            />
+            <p className="mt-1 text-xs text-slate-500">
+              Без суперсета блок не может начаться раньше окончания предыдущего: если один идёт до 22:45, следующий —
+              с 22:45 или позже.
+            </p>
+          </div>
+        )}
         <div className="sm:col-span-2">
           <Button type="submit" loading={saving}>
             Добавить блок

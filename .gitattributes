@@ -1,0 +1,8 @@
+# Файлы для Linux-сервера и Docker всегда с Unix-переводами строк (LF), даже если проект
+# скачан или собран на Windows. С CRLF скрипт не запустится: bash увидит «\r» в конце команды.
+*.sh text eol=lf
+deploy/** text eol=lf
+Dockerfile text eol=lf
+*.dockerignore text eol=lf
+Caddyfile text eol=lf
+*.example text eol=lf

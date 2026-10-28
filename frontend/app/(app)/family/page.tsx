@@ -347,7 +347,7 @@ function InvitesSection({ householdId }: { householdId: number }) {
                 <p className="text-xs text-slate-500">Действует до {formatDateTime(invite.expires_at)}</p>
               </div>
               <div className="flex items-center gap-2">
-                {copiedId === invite.id && <span className="text-xs text-emerald-700">Скопировано</span>}
+                {copiedId === invite.id && <span className="text-xs text-good-700">Скопировано</span>}
                 <Button variant="secondary" onClick={() => handleCopy(invite)}>
                   Копировать
                 </Button>

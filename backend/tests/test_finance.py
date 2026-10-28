@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from tests.helpers import register_and_login
+from tests.helpers import new_household, register_and_login
 
 
 def create_personal_ledger(client, user, currency: str = "EUR") -> dict:
@@ -18,18 +18,11 @@ def create_personal_ledger(client, user, currency: str = "EUR") -> dict:
 
 
 def make_household(client, owner, member) -> int:
-    """Создаёт домохозяйство «Семья» с владельцем owner и участником member; возвращает его id."""
-    response = client.post("/households", json={"name": "Семья"}, headers=owner["headers"])
-    assert response.status_code == 201, response.text
-    household_id = response.json()["id"]
+    """Создаёт домохозяйство «Семья» с владельцем owner и участником member; возвращает его id.
 
-    response = client.post(
-        f"/households/{household_id}/members",
-        json={"user_id": member["id"]},
-        headers=owner["headers"],
-    )
-    assert response.status_code == 201, response.text
-    return household_id
+    Участник вступает по коду приглашения, как в настоящем приложении.
+    """
+    return new_household(client, owner, member, name="Семья")
 
 
 def create_household_ledger(client, user, household_id: int):

@@ -1,30 +1,62 @@
 from fastapi import FastAPI, HTTPException, Depends
-from schemas import TrainingSessionUpdate, TokenResponse, LoginRequest, RegisterRequest, DailyNutritionSummary, MealEntryCreate, MealEntryResponse, WorkoutUpdate, WorkoutCreate, WorkoutResponse, TrainingSessionCreate, TrainingSessionResponse, ScheduleEventCreate, ScheduleEventResponse, GoalUpdate, GoalCreate, GoalResponse, WeightRecordCreate, WeightRecordResponse, UserUpdate, HouseholdMemberCreate, HouseholdMemberResponse,HouseholdCreate, HouseholdResponse, UserResponse, UserHouseholdResponse
+from schemas import TrainingSessionUpdate, DailyNutritionSummary, MealEntryCreate, MealEntryResponse, WorkoutUpdate, WorkoutCreate, WorkoutResponse, TrainingSessionCreate, TrainingSessionResponse, ScheduleEventCreate, ScheduleEventResponse, GoalUpdate, GoalCreate, GoalResponse, WeightRecordCreate, WeightRecordResponse, UserUpdate, HouseholdCreate, HouseholdResponse, UserResponse, UserHouseholdResponse
 from database import get_db
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from fastapi.responses import JSONResponse
 from services import (delete_goal, delete_training_session, delete_workout, get_meal_entries_for_day, delete_meal_entry, MealEntryNotFoundError,
                       delete_weight_record, WeightRecordNotFoundError,
                       update_training_session as update_training_session_service,
-                      TrainingSessionNotFoundError, get_user_households as get_user_households_service, authenticate_user as authenticate_user_service,
-InvalidCredentialsError, register_user as register_user_service,
-EmailAlreadyRegisteredError, get_daily_nutrition_summary, MealEntryUserNotFoundError, MealEntrySaveError, create_meal_entry, get_meal_entries, update_workout, WorkoutNotFoundError, WorkoutSessionNotFoundError, WorkoutTimeOutsideSessionError, WorkoutSaveError, create_workout, get_workouts_for_training_session, ScheduleEventAlreadyLinkedError, ScheduleEventNotFoundError, create_training_session as create_training_session_service, get_training_sessions as get_training_sessions_service,create_schedule_event as create_schedule_event_service, get_schedule_events as get_schedule_events_service, GoalNotFoundError, InvalidGoalDatesError,
+                      TrainingSessionNotFoundError, get_user_households as get_user_households_service,
+get_daily_nutrition_summary, MealEntryUserNotFoundError, MealEntrySaveError, create_meal_entry, get_meal_entries, update_workout, WorkoutNotFoundError, WorkoutSessionNotFoundError, WorkoutTimeOutsideSessionError, WorkoutOverlapError, WorkoutSupersetTargetError, WorkoutSaveError, create_workout, get_workouts_for_training_session, ScheduleEventAlreadyLinkedError, ScheduleEventNotFoundError, create_training_session as create_training_session_service, get_training_sessions as get_training_sessions_service,create_schedule_event as create_schedule_event_service, get_schedule_events as get_schedule_events_service, GoalNotFoundError, InvalidGoalDatesError,
                        update_goal as update_goal_service, create_goal as create_goal_service, get_user_goals as get_user_goals_service, create_weight_record as create_weight_record_service,
                       get_weight_records as get_weight_records_service, update_user as update_user_service, get_household_members as get_household_members_service,
-                      get_user as get_user_service, create_household as create_household_service, HouseholdMemberAlreadyExistsError,
-                      HouseholdNotFoundError, UserNotFoundError, add_household_member as add_household_member_service)
+                      get_user as get_user_service, create_household as create_household_service,
+                      HouseholdNotFoundError, UserNotFoundError)
 from datetime import datetime, date
-from security import create_access_token, get_current_user
+from security import get_current_user
 from models import User, HouseholdMember, Household
 from fastapi.middleware.cors import CORSMiddleware
-from config import get_cors_origins
+from config import docs_enabled, get_allowed_hosts, get_cors_origins, validate_settings
+from auth_routes import router as auth_router
+from security_middleware import BodySizeLimitMiddleware, SecurityHeadersMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from finance_routes import router as finance_router, register_error_handlers
-from access import require_household_member
+from finance_plan_routes import router as finance_plan_router, register_finance_plan_errors
+from access import require_household_member, require_same_user
 from household_routes import router as household_router
+from schedule_routes import router as schedule_router, register_error_handlers as register_schedule_errors
+from food_routes import router as food_router, register_error_handlers as register_food_errors
+from norms_routes import router as norms_router, register_error_handlers as register_norms_errors
+from recipe_routes import router as recipe_router, register_error_handlers as register_recipe_errors
+from meal_plan_routes import router as meal_plan_router, register_error_handlers as register_meal_plan_errors
+from shopping_routes import router as shopping_router
+from photo_routes import router as photo_router, register_error_handlers as register_photo_errors
+from family_plan_routes import router as family_plan_router, register_error_handlers as register_family_plan_errors
 from schemas import HouseholdMemberDetailResponse
 
 
 
-app = FastAPI()
+# На публичном сервере (ENVIRONMENT=production) сначала проверяем настройки: слабый секретный ключ,
+# адреса без https и т. п. останавливают запуск с понятным сообщением, а не работают «как-нибудь».
+validate_settings()
+
+# Документация (/docs, /redoc, /openapi.json) открыта только при разработке: на публичном сервере
+# она подсказывала бы посторонним устройство всех адресов API.
+_docs_on = docs_enabled()
+app = FastAPI(
+    title="Nutrition & Training Planner API",
+    version="1.1.0",
+    docs_url="/docs" if _docs_on else None,
+    redoc_url="/redoc" if _docs_on else None,
+    openapi_url="/openapi.json" if _docs_on else None,
+)
+
+# Прослойки добавляются от внутренней к внешней: последняя добавленная обрабатывает запрос первой.
+# Порядок важен: ограничение размера стоит ВНУТРИ CORS, чтобы ответ 413 тоже получил CORS-заголовки
+# (иначе браузер покажет «ошибку CORS» вместо понятного сообщения).
+app.add_middleware(BodySizeLimitMiddleware)
 # Разрешаем браузеру обращаться к API со страниц frontend.
 # Адреса берём из .env, чтобы в production их можно было заменить
 # без правки кода.
@@ -33,29 +65,42 @@ app.add_middleware(
     # Например ["http://localhost:3000"]
     allow_origins=get_cors_origins(),
     # Только методы, которые использует наш API
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],    # Токен идёт в Authorization, тело запросов в формате JSON.
-    # Параметр allow_credentials не указываем: он нужен для cookie,
-    # а мы их не используем.
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    # Токен идёт в Authorization, тело запросов в формате JSON.
     allow_headers=["Authorization", "Content-Type"],
+    # Cookie сессии (refresh_token) браузер отправляет на другой порт/адрес frontend только с этим разрешением.
+    # Допустимо потому, что allow_origins — точный список, а не "*".
+    allow_credentials=True,
 )
+app.add_middleware(SecurityHeadersMiddleware)
+_allowed_hosts = get_allowed_hosts()
+if _allowed_hosts:
+    # Запросы с чужим заголовком Host (подмена адреса сайта) отклоняются ответом 400
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts)
+
+app.include_router(auth_router)
 # Финансы: эндпоинты /finance/... и преобразование их ошибок в HTTP-ответы
 app.include_router(finance_router)
+# Повторяющиеся доходы и платежи, бюджетные циклы, нагрузка и цели (релиз 1.1)
+app.include_router(finance_plan_router)
 app.include_router(household_router)
+app.include_router(schedule_router)
+app.include_router(food_router)
+app.include_router(norms_router)
+app.include_router(recipe_router)
+app.include_router(meal_plan_router)
+app.include_router(shopping_router)
+app.include_router(family_plan_router)
+app.include_router(photo_router)
 register_error_handlers(app)
-
-
-
-def require_same_user(
-    user_id: int,
-    current_user=Depends(get_current_user),
-):
-    """Разрешает доступ только к собственному профилю."""
-
-    if current_user.id != user_id:
-        raise HTTPException(
-            status_code=403,
-            detail="У вас нет доступа к данным этого пользователя",
-        )
+register_finance_plan_errors(app)
+register_schedule_errors(app)
+register_food_errors(app)
+register_norms_errors(app)
+register_recipe_errors(app)
+register_meal_plan_errors(app)
+register_family_plan_errors(app)
+register_photo_errors(app)
 
 
 
@@ -63,10 +108,21 @@ def require_same_user(
 
 
 
-@app.get("/hello")
-def hello():
-    print("Hello World")
-    return {"message": "Hello Daniil"}
+
+
+
+@app.get("/health", tags=["service"])
+def health_endpoint(db: Session = Depends(get_db)):
+    """Проверка «сервер жив и видит базу». Открыта без токена: её опрашивает Docker и мониторинг.
+
+    Ответ 200: {"status": "ok"}. Если база недоступна — 503: {"status": "unavailable"}.
+    Никаких подробностей (версии, адреса, тексты ошибок) наружу не выдаётся.
+    """
+    try:
+        db.execute(text("SELECT 1"))
+    except SQLAlchemyError:
+        return JSONResponse(status_code=503, content={"status": "unavailable"})
+    return {"status": "ok"}
 
 
 @app.get("/users/me", response_model=UserResponse)
@@ -105,62 +161,6 @@ def get_user(
         )
 
     return db_user
-
-
-@app.post(
-    "/auth/register",
-    response_model=UserResponse,
-    status_code=201,
-)
-def register_user_endpoint(
-    registration_data: RegisterRequest,
-    db: Session = Depends(get_db),
-):
-    """Регистрирует пользователя."""
-
-    try:
-        return register_user_service(
-            db=db,
-            registration_data=registration_data,
-        )
-    except EmailAlreadyRegisteredError:
-        raise HTTPException(
-            status_code=409,
-            detail="Этот Email уже зарегистрирован",
-        )
-
-
-
-@app.post("/auth/login", response_model=TokenResponse)
-def login_user(
-    login_data: LoginRequest,
-    db: Session = Depends(get_db),
-):
-    """Проверяет учётные данные и выдаёт JWT."""
-
-    try:
-        user = authenticate_user_service(
-            db=db,
-            login_data=login_data,
-        )
-    except InvalidCredentialsError:
-        raise HTTPException(
-            status_code=401,
-            detail="Неправильный email или password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    # В токене сохраняем идентификатор пользователя.
-    access_token = create_access_token(
-        data={"sub": str(user.id)}
-    )
-
-    return TokenResponse(
-        access_token=access_token,
-        token_type="bearer",
-    )
-
-
 
 
 @app.post(
@@ -209,49 +209,6 @@ def list_my_households_endpoint(
     # поэтому показываются только собственные домохозяйства.
     # Это тот же GET-путь /households, что и у POST, но с другим методом.
     return get_user_households_service(db=db, user_id=current_user.id)
-
-
-@app.post(
-    "/households/{household_id}/members",
-    response_model=HouseholdMemberResponse,
-    status_code=201,
-)
-def add_household_member_endpoint(
-    household_id: int,
-    member: HouseholdMemberCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    require_household_member(
-        household_id=household_id,
-        db=db,
-        current_user=current_user,
-        allowed_roles=("owner", "admin"),
-    )
-    try:
-        return add_household_member_service(
-            db=db,
-            household_id=household_id,
-            user_id=member.user_id,
-        )
-
-    except HouseholdNotFoundError:
-        raise HTTPException(
-            status_code=404,
-            detail="Домохозяйство не найдено",
-        )
-
-    except UserNotFoundError:
-        raise HTTPException(
-            status_code=404,
-            detail="Пользователь не найден",
-        )
-
-    except HouseholdMemberAlreadyExistsError:
-        raise HTTPException(
-            status_code=409,
-            detail="Пользователь уже является членом этого домохозяйства",
-        )
 
 
 @app.get(
@@ -648,6 +605,17 @@ def create_workout_endpoint(
         raise HTTPException(
             status_code=422,
             detail="Время блока должно находиться внутри тренировочной сессии",
+        )
+
+    except WorkoutOverlapError as exc:
+        # 409 Conflict: запрос верный, но противоречит уже сохранённым блокам.
+        # В detail лежит готовая подсказка с временем, когда можно начать блок.
+        raise HTTPException(status_code=409, detail=exc.message)
+
+    except WorkoutSupersetTargetError:
+        raise HTTPException(
+            status_code=404,
+            detail="Блок для объединения в суперсет не найден в этой сессии",
         )
 
     except WorkoutSaveError:

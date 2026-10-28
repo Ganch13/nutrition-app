@@ -1,0 +1,50 @@
+name: nutrition-app
+
+services:
+  # База данных. Данные лежат в томе db_data и переживают перезапуск контейнеров
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nutrition
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}   # берётся из файла .env рядом
+      POSTGRES_DB: nutrition
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck: # backend ждёт, пока база реально готова принимать запросы
+      test: [ "CMD-SHELL", "pg_isready -U nutrition -d nutrition" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    image: nutrition-backend:1.1
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://nutrition:${POSTGRES_PASSWORD}@db:5432/nutrition
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+    volumes:
+      - uploads:/data/uploads   # фото прогресса переживают пересборку контейнера
+    ports:
+      - "127.0.0.1:8000:8000"   # доступно только с этого же компьютера
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    image: nutrition-frontend:1.1
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "127.0.0.1:3000:3000"
+
+volumes:
+  db_data:
+  uploads:

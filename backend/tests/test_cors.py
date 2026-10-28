@@ -42,9 +42,9 @@ def test_preflight_allowed_for_frontend_origin(client):
     allowed_headers = response.headers["access-control-allow-headers"].lower()
     assert "authorization" in allowed_headers
 
-    # Cookie мы не используем, поэтому разрешение на передачу учётных
-    # данных не выдаётся
-    assert "access-control-allow-credentials" not in response.headers
+    # Cookie сессии (refresh_token) передаётся на API только для нашего frontend: разрешение на
+    # учётные данные выдано именно этому адресу, а не "*"
+    assert response.headers["access-control-allow-credentials"] == "true"
 
 
 def test_preflight_rejected_for_foreign_origin(client):
@@ -64,8 +64,8 @@ def test_preflight_rejected_for_foreign_origin(client):
 
 def test_normal_request_from_frontend_gets_cors_header(client):
     """Обычный ответ для нашего frontend содержит разрешающий заголовок."""
-    # /hello — открытый эндпоинт, для него токен не нужен
-    response = client.get("/hello", headers={"Origin": ALLOWED_ORIGIN})
+    # /health — открытый эндпоинт, для него токен не нужен
+    response = client.get("/health", headers={"Origin": ALLOWED_ORIGIN})
 
     assert response.status_code == 200
     # Без этого заголовка браузер не отдал бы ответ коду страницы
@@ -74,7 +74,7 @@ def test_normal_request_from_frontend_gets_cors_header(client):
 
 def test_normal_request_from_foreign_origin_gets_no_cors_header(client):
     """Для чужого origin разрешающего заголовка в ответе нет."""
-    response = client.get("/hello", headers={"Origin": FOREIGN_ORIGIN})
+    response = client.get("/health", headers={"Origin": FOREIGN_ORIGIN})
 
     # Сервер ответил, но браузер из-за отсутствия заголовка скроет ответ
     # от страницы чужого сайта

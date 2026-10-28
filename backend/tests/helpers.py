@@ -71,3 +71,26 @@ def register_and_login(
     return {"id": user_id, "headers": {"Authorization": f"Bearer {token}"}}
 
 
+
+
+def new_household(client, owner: AuthUser, *members: AuthUser, name: str = "Дом") -> int:
+    """Владелец создаёт домохозяйство, остальные вступают по коду приглашения.
+
+    Пример: new_household(client, danya, lesya) → 1 (id домохозяйства, где Даня владелец,
+    а Леся участник). Возвращает id домохозяйства.
+    """
+    response = client.post("/households", json={"name": name}, headers=owner["headers"])
+    assert response.status_code == 201, response.text
+    household_id = response.json()["id"]
+
+    for member in members:
+        invite = client.post(f"/households/{household_id}/invites", headers=owner["headers"])
+        assert invite.status_code == 201, invite.text
+        joined = client.post(
+            "/households/join",
+            json={"code": invite.json()["code"]},
+            headers=member["headers"],
+        )
+        assert joined.status_code == 200, joined.text
+
+    return household_id

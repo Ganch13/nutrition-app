@@ -1,6 +1,6 @@
 import pytest
 from typing import TypedDict
-from tests.helpers import AuthUser, register_and_login
+from tests.helpers import AuthUser, new_household, register_and_login
 
 
 class HouseholdSetup(TypedDict):
@@ -34,25 +34,9 @@ def household_setup(client) -> HouseholdSetup:
     member = register_and_login(client, "member@example.com", "Member")        # id 2
     outsider = register_and_login(client, "outsider@example.com", "Outsider")  # id 3
 
-    # Владелец создаёт домохозяйство
-    response = client.post(
-        "/households",
-        json={"name": "Дом"},
-        headers=owner["headers"],
-    )
-    assert response.status_code == 201, response.text
-    # response.json() → {"id": 1, "name": "Дом", "created_at": "2026-10-22T..."}
-    household_id = response.json()["id"]  # 1
-
-    # Владелец добавляет member в домохозяйство
-    response = client.post(
-        f"/households/{household_id}/members",
-        json={"user_id": member["id"]},  # → {"user_id": 2}
-        headers=owner["headers"],
-    )
-    assert response.status_code == 201, response.text
-    # response.json() → {"household_id": 1, "user_id": 2, "role": "member",
-    #                    "joined_at": "2026-10-22T..."}
+    # Владелец создаёт домохозяйство, member вступает по коду приглашения
+    # (new_household возвращает id, например 1)
+    household_id = new_household(client, owner, member)
 
     # Всё нужное тестам отдаём одним словарём
     return {
@@ -188,122 +172,28 @@ def test_list_members_of_unknown_household_returns_404(client, household_setup):
 
 # ---------- Добавление участников ----------
 
-def test_add_member_requires_token(client, household_setup):
-    household_id = household_setup["household_id"]  # 1
-    newbie = register_and_login(client, "newbie@example.com", "Newbie")  # id 4
+def test_members_cannot_be_added_by_user_id(client, household_setup):
+    """Добавить человека в семью по его номеру нельзя: вступление только по коду приглашения.
 
-    response = client.post(
-        f"/households/{household_id}/members",
-        json={"user_id": newbie["id"]},  # → {"user_id": 4}
-    )
-    assert response.status_code == 401
-
-
-def test_owner_can_add_member(client, household_setup):
-    household_id = household_setup["household_id"]  # 1
-    owner = household_setup["owner"]                # {"id": 1, "headers": {...}}
-    newbie = register_and_login(client, "newbie@example.com", "Newbie")  # id 4
-
-    response = client.post(
-        f"/households/{household_id}/members",
-        json={"user_id": newbie["id"]},  # → {"user_id": 4}
-        headers=owner["headers"],
-    )
-    assert response.status_code == 201, response.text
-    body = response.json()
-    # body → {"household_id": 1, "user_id": 4, "role": "member", "joined_at": "..."}
-    assert body["user_id"] == newbie["id"]
-    assert body["role"] == "member"
-
-    # Новый участник теперь видит список; в нём 3 человека: owner, member, newbie
-    response = client.get(
-        f"/households/{household_id}/members",
-        headers=newbie["headers"],
-    )
-    assert response.status_code == 200
-    assert len(response.json()) == 3
-
-
-def test_regular_member_cannot_add_members(client, household_setup):
-    household_id = household_setup["household_id"]  # 1
-    owner = household_setup["owner"]                # {"id": 1, "headers": {...}}
-    member = household_setup["member"]              # {"id": 2, "headers": {...}}
-    newbie = register_and_login(client, "newbie@example.com", "Newbie")  # id 4
-
-    # Обычный участник пытается добавить newbie
-    response = client.post(
-        f"/households/{household_id}/members",
-        json={"user_id": newbie["id"]},
-        headers=member["headers"],
-    )
-    assert response.status_code == 403
-
-    # Проверяем, что newbie действительно не добавился: по-прежнему 2 участника
-    response = client.get(
-        f"/households/{household_id}/members",
-        headers=owner["headers"],
-    )
-    assert len(response.json()) == 2
-
-
-def test_outsider_cannot_add_members(client, household_setup):
+    Иначе владелец мог бы без согласия «затащить» в семью любого зарегистрированного пользователя
+    и получить доступ к общим данным (финансы, список участников).
+    """
     household_id = household_setup["household_id"]  # 1
     owner = household_setup["owner"]                # {"id": 1, "headers": {...}}
     outsider = household_setup["outsider"]          # {"id": 3, "headers": {...}}
 
-    # Посторонний пытается добавить в чужое домохозяйство самого себя
-    response = client.post(
-        f"/households/{household_id}/members",
-        json={"user_id": outsider["id"]},  # → {"user_id": 3}
-        headers=outsider["headers"],
-    )
-    assert response.status_code == 403
+    for user in (owner, outsider):
+        response = client.post(
+            f"/households/{household_id}/members",
+            json={"user_id": outsider["id"]},  # → {"user_id": 3}
+            headers=user["headers"],
+        )
+        assert response.status_code == 405, response.text  # адрес есть только для просмотра списка
 
-    # Список участников не изменился
-    response = client.get(
-        f"/households/{household_id}/members",
-        headers=owner["headers"],
-    )
+    # Список участников не изменился: владелец и member
+    response = client.get(f"/households/{household_id}/members", headers=owner["headers"])
     assert len(response.json()) == 2
-
-
-def test_add_member_to_unknown_household_returns_404(client, household_setup):
-    owner = household_setup["owner"]    # {"id": 1, "headers": {...}}
-    member = household_setup["member"]  # {"id": 2, "headers": {...}}
-
-    response = client.post(
-        "/households/999999/members",
-        json={"user_id": member["id"]},
-        headers=owner["headers"],
-    )
-    assert response.status_code == 404
-
-
-def test_add_unknown_user_returns_404(client, household_setup):
-    household_id = household_setup["household_id"]  # 1
-    owner = household_setup["owner"]                # {"id": 1, "headers": {...}}
-
-    # Пользователя с id 999999 нет
-    response = client.post(
-        f"/households/{household_id}/members",
-        json={"user_id": 999999},
-        headers=owner["headers"],
-    )
-    assert response.status_code == 404
-
-
-def test_add_existing_member_returns_409(client, household_setup):
-    household_id = household_setup["household_id"]  # 1
-    owner = household_setup["owner"]                # {"id": 1, "headers": {...}}
-    member = household_setup["member"]              # {"id": 2, "headers": {...}}
-
-    # member уже состоит в домохозяйству (его добавила фикстура)
-    response = client.post(
-        f"/households/{household_id}/members",
-        json={"user_id": member["id"]},  # → {"user_id": 2}
-        headers=owner["headers"],
-    )
-    assert response.status_code == 409
+    assert client.get("/households", headers=outsider["headers"]).json() == []
 
 
 # ---------- Список моих домохозяйств ----------

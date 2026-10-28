@@ -1,6 +1,8 @@
 """HTTP-эндпоинты финансов (раздел /finance)."""
 
+from datetime import date, datetime
 from typing import Annotated
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, FastAPI, Query, Request
 from fastapi.responses import JSONResponse
@@ -30,6 +32,7 @@ from finance_services import (
     list_transactions,
     set_budget,
 )
+from finance_recurring import sync_recurring
 from models import User
 from schemas import (
     FinanceBudgetSet,
@@ -80,6 +83,19 @@ def register_error_handlers(app: FastAPI) -> None:
             return JSONResponse(status_code=status_code, content={"detail": detail})
 
         app.add_exception_handler(exception_class, handler)
+
+
+def get_today(current_user: User = Depends(get_current_user)) -> date:
+    """Зависимость: сегодняшняя дата по часовому поясу пользователя.
+
+    Вынесена в зависимость, чтобы тесты могли подставить фиксированную дату
+    (app.dependency_overrides[get_today] = lambda: date(2026, 10, 28)).
+    """
+    try:
+        zone = ZoneInfo(current_user.timezone)
+    except (ZoneInfoNotFoundError, ValueError):
+        zone = ZoneInfo("UTC")
+    return datetime.now(zone).date()
 
 
 def get_access(
@@ -148,8 +164,11 @@ def list_transactions_endpoint(
     month: MonthQuery,
     access: LedgerAccess = Depends(get_access),
     db: Session = Depends(get_db),
+    today: date = Depends(get_today),
 ):
     """Операции за месяц: GET /finance/ledgers/1/transactions?month=2026-10"""
+    # Сначала списываем платежи с автосписанием, чтобы список был актуальным
+    sync_recurring(db, access.ledger.id, today)
     return list_transactions(db, access, month)
 
 
@@ -193,6 +212,8 @@ def summary_endpoint(
     month: MonthQuery,
     access: LedgerAccess = Depends(get_access),
     db: Session = Depends(get_db),
+    today: date = Depends(get_today),
 ):
     """Сводка за месяц: GET /finance/ledgers/1/summary?month=2026-10"""
+    sync_recurring(db, access.ledger.id, today)
     return get_summary(db, access, month)

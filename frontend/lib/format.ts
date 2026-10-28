@@ -5,8 +5,15 @@ import type {
   Intensity,
   LoadType,
   MealType,
+  ScheduleEventType,
   TrainingSessionStatus,
   FinanceKind,
+  FoodCategory,
+  ActivityLevel,
+  GoalProgressStatus,
+  MealLocation,
+  PlannedMealStatus,
+  PhotoAngle,
 } from "./types";
 
 // ---------- Подписи для значений, которые приходят с backend ----------
@@ -68,6 +75,95 @@ export const INTENSITY_LABELS: Record<Intensity, string> = {
   high: "Высокая",
 };
 
+export const EVENT_TYPE_LABELS: Record<ScheduleEventType, string> = {
+  sleep: "Сон",
+  work: "Работа",
+  meal: "Приём пищи",
+  workout: "Тренировка",
+  personal: "Личное",
+  other: "Другое",
+};
+
+export const EVENT_TYPE_TONES: Record<ScheduleEventType, Tone> = {
+  sleep: "slate",
+  work: "amber",
+  meal: "green",
+  workout: "green",
+  personal: "slate",
+  other: "slate",
+};
+
+export const FOOD_CATEGORY_LABELS: Record<FoodCategory, string> = {
+  meat: "Мясо и птица",
+  fish: "Рыба и морепродукты",
+  eggs: "Яйца",
+  dairy: "Молочные продукты",
+  grains: "Крупы и гарниры",
+  bakery: "Хлеб и выпечка",
+  vegetables: "Овощи",
+  fruits: "Фрукты и ягоды",
+  legumes: "Бобовые",
+  nuts: "Орехи и семена",
+  fats: "Масла и жиры",
+  sweets: "Сладкое",
+  drinks: "Напитки",
+  sauces: "Соусы",
+  supplements: "Спортивное питание",
+  other: "Другое",
+};
+
+export const ACTIVITY_LEVEL_LABELS: Record<ActivityLevel, string> = {
+  sedentary: "Сидячий день (офис, мало ходьбы)",
+  light: "Немного ходьбы в течение дня",
+  moderate: "Много ходьбы или работа на ногах",
+  active: "Тяжёлый физический труд",
+};
+
+export const GOAL_PROGRESS_LABELS: Record<GoalProgressStatus, string> = {
+  no_data: "Мало данных",
+  reached: "Цель достигнута",
+  on_track: "По плану",
+  faster: "Быстрее плана",
+  slower: "Медленнее плана",
+  stalled: "Без изменений",
+  wrong_direction: "Не в ту сторону",
+};
+
+export const GOAL_PROGRESS_TONES: Record<GoalProgressStatus, Tone> = {
+  no_data: "slate",
+  reached: "green",
+  on_track: "green",
+  faster: "amber",
+  slower: "amber",
+  stalled: "amber",
+  wrong_direction: "red",
+};
+
+export const MEAL_LOCATION_LABELS: Record<MealLocation, string> = {
+  home: "Дома",
+  work: "На работе",
+  away: "Вне дома",
+};
+
+export const PHOTO_ANGLE_LABELS: Record<PhotoAngle, string> = {
+  front: "Спереди",
+  side: "Сбоку",
+  back: "Сзади",
+  other: "Другое",
+};
+
+export const PLANNED_STATUS_LABELS: Record<PlannedMealStatus, string> = {
+  planned: "В плане",
+  eaten: "Съеден",
+  skipped: "Пропущен",
+};
+
+export const PLANNED_STATUS_TONES: Record<PlannedMealStatus, Tone> = {
+  planned: "slate",
+  eaten: "green",
+  skipped: "amber",
+};
+
 /** Варианты пола для выпадающего списка; пустое значение означает «не задан». */
 export const SEX_OPTIONS: [string, string][] = [
   ["", "—"],
@@ -91,6 +187,11 @@ export function formatNumber(value: string | number, maxDigits = 1): string {
 /** Вес для показа: "100.00" → "100 кг"; null → "—". */
 export function formatKg(value: string | null): string {
   return value === null ? "—" : `${formatNumber(value, 2)} кг`;
+}
+
+/** Калории для показа без дробной части: "331.50" → "332 ккал". */
+export function formatKcal(value: string | number | null): string {
+  return value === null ? "—" : `${formatNumber(value, 0)} ккал`;
 }
 
 /** Пустое поле формы → null, иначе число: "" → null, "80.5" → 80.5. */
@@ -145,6 +246,33 @@ export function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
 }
 
+/** Дата момента iso в часовом поясе timeZone: ("2026-10-26T22:30:00Z", "Europe/Moscow") → "2026-10-27". */
+export function dateInZone(iso: string, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date(iso));
+}
+
+/** Время момента iso в часовом поясе timeZone: ("2026-10-26T06:00:00Z", "Europe/Moscow") → "09:00". */
+export function formatTimeInZone(iso: string, timeZone: string): string {
+  return new Date(iso).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone });
+}
+
+/** Понедельник недели, в которую попадает дата: "2026-10-28" (среда) → "2026-10-26". */
+export function mondayOf(date: string): string {
+  // getUTCDay: 0 — воскресенье … 6 — суббота; нам нужно число дней после понедельника
+  const dayOfWeek = new Date(`${date}T00:00:00Z`).getUTCDay();
+  return shiftDate(date, -((dayOfWeek + 6) % 7));
+}
+
+/** "2026-10-26" → "пн, 26 окт." */
+export function formatDayShort(date: string): string {
+  return new Date(`${date}T12:00:00Z`).toLocaleDateString("ru-RU", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  });
+}
+
 /** "2026-10-23T17:00:00Z" → "23 окт., 17:00" (в часовом поясе устройства). */
 export function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString("ru-RU", {
@@ -153,6 +281,38 @@ export function formatDateTime(iso: string): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+/**
+ * Дата и время в часовом поясе timeZone → момент времени в формате ISO (UTC).
+ * Пример: ("2026-10-27", "13:30", "Europe/Moscow") → "2026-10-27T10:30:00.000Z".
+ * Нужен, чтобы время приёма пищи считалось по часовому поясу профиля, а не устройства.
+ */
+export function zonedToIso(date: string, time: string, timeZone: string): string {
+  const [year, month, day] = date.split("-").map(Number);
+  const [hour, minute] = time.split(":").map(Number);
+  const asUtc = Date.UTC(year, month - 1, day, hour, minute);
+
+  // Насколько местное время пояса опережает UTC в момент ms (в миллисекундах)
+  const offsetAt = (ms: number): number => {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }).formatToParts(new Date(ms));
+    const part = (type: string) => Number(parts.find((item) => item.type === type)?.value);
+    const local = Date.UTC(part("year"), part("month") - 1, part("day"), part("hour"), part("minute"), part("second"));
+    return local - ms;
+  };
+
+  // Второй проход уточняет смещение, если рядом переход на летнее/зимнее время
+  const first = asUtc - offsetAt(asUtc);
+  return new Date(asUtc - offsetAt(first)).toISOString();
 }
 
 /** Date → значение для поля datetime-local: "2026-10-23T17:00". */
@@ -215,7 +375,49 @@ export const CURRENCY_OPTIONS: [string, string][] = [
 
 /** Сумма с валютой по-русски: (120.5, "EUR") → "120,50 €". */
 export function formatMoney(value: string | number, currency: string): string {
-  return Number(value).toLocaleString("ru-RU", { style: "currency", currency });
+  const amount = Number(value);
+  // Целые суммы без копеек: "35 000 ₽"; дробные с двумя знаками: "1 250,50 ₽"
+  const whole = Number.isInteger(amount);
+  return amount.toLocaleString("ru-RU", {
+    style: "currency",
+    currency,
+    minimumFractionDigits: whole ? 0 : 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+/** "2026-10-28" → "28 окт." (день и месяц, без года). */
+export function formatDayMonth(date: string): string {
+  return new Date(`${date}T12:00:00Z`).toLocaleDateString("ru-RU", {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  });
+}
+
+/** "2026-10-28" → "ср, 28 окт." (с днём недели). */
+export function formatWeekdayDayMonth(date: string): string {
+  return new Date(`${date}T12:00:00Z`).toLocaleDateString("ru-RU", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  });
+}
+
+/** Сколько дней от a до b: ("2026-10-10", "2026-10-13") → 3. Отрицательное, если b раньше a. */
+export function daysBetween(a: string, b: string): number {
+  return Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
+}
+
+/** Склонение по числу: plural(1, ["день", "дня", "дней"]) → "день"; 3 → "дня"; 11 → "дней"; 21 → "день". */
+export function plural(count: number, forms: [string, string, string]): string {
+  const n = Math.abs(count) % 100;
+  const last = n % 10;
+  if (n > 10 && n < 20) return forms[2];
+  if (last === 1) return forms[0];
+  if (last >= 2 && last <= 4) return forms[1];
+  return forms[2];
 }
 
 /** Сдвигает месяц: ("2026-12", 1) → "2027-01". */

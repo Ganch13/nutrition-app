@@ -1,27 +1,33 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
+import { BRAND } from "@/lib/brand";
+import { IPHONE_SPLASH } from "@/lib/splash";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
-
+// Здесь задаётся то, что видно «снаружи» страницы: название во вкладке браузера (title),
+// подпись под значком на экране iPhone (appleWebApp.title) и заставка при запуске (startupImage).
+// Само название берётся из lib/brand.ts.
 export const metadata: Metadata = {
-  title: "Balance — питание и тренировки",
-  description: "Планирование питания и тренировок",
+  title: BRAND.title,
+  description: BRAND.description,
+  applicationName: BRAND.name,
   // Для запуска с главного экрана iPhone как отдельного приложения
-  appleWebApp: { capable: true, title: "Balance", statusBarStyle: "default" },
+  appleWebApp: {
+    capable: true,
+    title: BRAND.name,
+    statusBarStyle: "default",
+    // Картинки на время запуска: без них iPhone показывает пустой чёрный или белый экран
+    startupImage: IPHONE_SPLASH,
+  },
+  // Не превращать числа в тексте в ссылки «позвонить»
+  formatDetection: { telephone: false },
 };
 
-// Цвет строки состояния и поведение экрана на телефоне
+// Цвет строки состояния и поведение экрана на телефоне.
+// colorScheme: "light" — приложение всегда светлое, поэтому тёмная тема телефона не делает фон чёрным.
 export const viewport: Viewport = {
-  themeColor: "#047857",
+  themeColor: BRAND.themeColor,
+  colorScheme: "light",
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
@@ -29,11 +35,11 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html
-      lang="ru"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col">{children}</body>
+    <html lang="ru" className="h-full antialiased">
+      <body className="min-h-full">
+        {children}
+        <ServiceWorkerRegister />
+      </body>
     </html>
   );
 }

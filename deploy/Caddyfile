@@ -1,0 +1,40 @@
+# Настройки Caddy. Значения {$DOMAIN} и {$ACME_EMAIL} берутся из deploy/.env через docker-compose.prod.yml.
+{
+	# Почта для уведомлений Let's Encrypt (например, если сертификат не удаётся продлить)
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	# Сжатие ответов
+	encode zstd gzip
+
+	# Журнал запросов в docker logs (адрес, путь, код ответа)
+	log {
+		output stdout
+		format console
+	}
+
+	header {
+		# Браузер заходит на сайт только по HTTPS в течение года (после первого успешного посещения)
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# Не сообщать, на каком сервере работает сайт
+		-Server
+	}
+
+	# /api/... → backend. Префикс /api отбрасывается: запрос /api/auth/login приходит туда как /auth/login
+	handle_path /api/* {
+		request_body {
+			# Фото до 8 МБ плюс запас; остальные запросы маленькие, их дополнительно ограничивает backend
+			max_size 10MB
+		}
+		reverse_proxy backend:8000
+	}
+
+	# Всё остальное — страницы сайта
+	handle {
+		request_body {
+			max_size 1MB
+		}
+		reverse_proxy frontend:3000
+	}
+}

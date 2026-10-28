@@ -1,17 +1,21 @@
 """Бизнес-логика финансов: книги, категории, операции, лимиты и сводка."""
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from models import (
     FinanceBudget,
     FinanceCategory,
+    FinanceRecurringOccurrence,
+    FinanceRecurringRule,
     FinanceTransaction,
+    FinancialGoal,
+    FinancialGoalEntry,
     Household,
     HouseholdMember,
     Ledger,
@@ -35,6 +39,9 @@ DEFAULT_INCOME_CATEGORIES = ["Зарплата", "Прочие доходы"]
 
 # Роли домохозяйства, которым разрешено управлять категориями и лимитами
 MANAGER_ROLES = ("owner", "admin")
+
+# Подпись автора, чей аккаунт удалён
+DELETED_USER_NAME = "Удалённый пользователь"
 
 
 class LedgerNotFoundError(Exception):
@@ -121,6 +128,7 @@ def ledger_to_dict(ledger: Ledger, household_name: str | None, can_manage: bool)
         "household_name": household_name,
         "currency": ledger.currency,
         "can_manage": can_manage,
+        "cycle_mode": ledger.cycle_mode,
     }
 
 
@@ -141,7 +149,7 @@ def transaction_to_dict(
         "occurred_on": transaction.occurred_on,
         "description": transaction.description,
         "created_by_user_id": transaction.created_by_user_id,
-        "created_by_name": author_name,
+        "created_by_name": author_name or DELETED_USER_NAME,
         "created_at": transaction.created_at,
     }
 
@@ -293,7 +301,12 @@ def delete_category(db: Session, access: LedgerAccess, category_id: int) -> None
             FinanceTransaction.category_id == category.id
         )
     )
-    if used:
+    used_by_rules = db.scalar(
+        select(func.count(FinanceRecurringRule.id)).where(
+            FinanceRecurringRule.category_id == category.id
+        )
+    )
+    if used or used_by_rules:
         raise CategoryInUseError
 
     try:
@@ -313,7 +326,7 @@ def list_transactions(db: Session, access: LedgerAccess, month: str) -> list[dic
         select(FinanceTransaction, FinanceCategory.name, FinanceCategory.kind, User.name)
         .select_from(FinanceTransaction)
         .join(FinanceCategory, FinanceCategory.id == FinanceTransaction.category_id)
-        .join(User, User.id == FinanceTransaction.created_by_user_id)
+        .outerjoin(User, User.id == FinanceTransaction.created_by_user_id)
         .where(
             FinanceTransaction.ledger_id == access.ledger.id,
             FinanceTransaction.occurred_on >= first_day,
@@ -373,6 +386,13 @@ def delete_transaction(
         raise FinancePermissionError
 
     try:
+        # Если операцию создало повторяющееся правило, отметка не пропадает, а становится «пропущено»:
+        # иначе правило со следующей проверкой создало бы такую же операцию заново
+        db.execute(
+            update(FinanceRecurringOccurrence)
+            .where(FinanceRecurringOccurrence.transaction_id == transaction.id)
+            .values(status="skipped", transaction_id=None)
+        )
         db.delete(transaction)
         db.commit()
     except SQLAlchemyError:
@@ -421,22 +441,24 @@ def set_budget(
         raise
 
 
-def get_summary(db: Session, access: LedgerAccess, month: str) -> dict:
-    """Сводка за месяц: доходы, расходы, баланс и итоги по всем категориям с лимитами.
+def summarize_range(db: Session, access: LedgerAccess, first_day: date, last_day: date) -> dict:
+    """Итоги за период [first_day, last_day] (оба дня включаются): доходы, расходы и категории с лимитами.
 
     В categories попадают все категории книги, в том числе с нулевой суммой,
     чтобы интерфейс мог показать лимиты, по которым пока нет расходов.
+    Пример результата: {"income": Decimal("90000"), "expense": Decimal("41200"), "balance": Decimal("48800"),
+                       "categories": [{"category_id": 1, "name": "Продукты", "kind": "expense",
+                                       "total": Decimal("15000"), "budget_limit": Decimal("20000")}, ...]}
     """
-    first_day, next_month = month_bounds(month)
     ledger_id = access.ledger.id
 
-    # Суммы по категориям за месяц одним запросом: {id категории: сумма}
+    # Суммы по категориям за период одним запросом: {id категории: сумма}
     total_rows = db.execute(
         select(FinanceTransaction.category_id, func.sum(FinanceTransaction.amount))
         .where(
             FinanceTransaction.ledger_id == ledger_id,
             FinanceTransaction.occurred_on >= first_day,
-            FinanceTransaction.occurred_on < next_month,
+            FinanceTransaction.occurred_on <= last_day,
         )
         .group_by(FinanceTransaction.category_id)
     ).all()
@@ -472,12 +494,37 @@ def get_summary(db: Session, access: LedgerAccess, month: str) -> dict:
             }
         )
 
+    return {"income": income, "expense": expense, "balance": income - expense, "categories": rows}
+
+
+def get_summary(db: Session, access: LedgerAccess, month: str) -> dict:
+    """Сводка за календарный месяц ("2026-10")."""
+    first_day, next_month = month_bounds(month)
+    result = summarize_range(db, access, first_day, next_month - timedelta(days=1))
+
     return {
-        "ledger_id": ledger_id,
+        "ledger_id": access.ledger.id,
         "month": month,
         "currency": access.ledger.currency,
-        "income": income,
-        "expense": expense,
-        "balance": income - expense,
-        "categories": rows,
+        **result,
     }
+
+
+def delete_ledger_data(db: Session, ledger_id: int) -> None:
+    """Удаляет книгу со всем содержимым: повторяющиеся правила, цели, лимиты, операции, категории.
+
+    Нужна при удалении аккаунта и семьи. Порядок важен: сначала то, что ссылается на другое
+    (отметки выплат → правила, взносы → цели, операции → категории), и только потом сама книга.
+    Коммит не делает: его выполняет вызывающий код, чтобы всё удалялось одной транзакцией.
+    """
+    rule_ids = select(FinanceRecurringRule.id).where(FinanceRecurringRule.ledger_id == ledger_id)
+    goal_ids = select(FinancialGoal.id).where(FinancialGoal.ledger_id == ledger_id)
+
+    db.execute(delete(FinanceRecurringOccurrence).where(FinanceRecurringOccurrence.rule_id.in_(rule_ids)))
+    db.execute(delete(FinanceRecurringRule).where(FinanceRecurringRule.ledger_id == ledger_id))
+    db.execute(delete(FinancialGoalEntry).where(FinancialGoalEntry.goal_id.in_(goal_ids)))
+    db.execute(delete(FinancialGoal).where(FinancialGoal.ledger_id == ledger_id))
+    db.execute(delete(FinanceBudget).where(FinanceBudget.ledger_id == ledger_id))
+    db.execute(delete(FinanceTransaction).where(FinanceTransaction.ledger_id == ledger_id))
+    db.execute(delete(FinanceCategory).where(FinanceCategory.ledger_id == ledger_id))
+    db.execute(delete(Ledger).where(Ledger.id == ledger_id))

@@ -397,6 +397,73 @@ export type FinanceTransaction = {
   created_by_user_id: number | null;
   created_by_name: string;
   created_at: string;
+  // Цель, к которой отнесён расход, например 3 и "Отпуск"; null — без цели
+  goal_id: number | null;
+  goal_name: string | null;
+  // Сводка, строкой которой является операция, и её период («Сводка 19–25 окт.»); null — обычная операция
+  summary_id: number | null;
+  summary_start: string | null;
+  summary_end: string | null;
+};
+
+/** Строка сводки: категория расходов, сумма и (необязательно) цель. Пример: { category_id: 3, amount: 8000 }. */
+export type ExpenseSummaryLineInput = {
+  category_id: number;
+  amount: number;
+  goal_id?: number | null;
+};
+
+/** Тело сверки POST /finance/ledgers/{id}/summaries/check. */
+export type ExpenseSummaryCheckInput = {
+  period_start: string;
+  period_end: string;
+  lines: ExpenseSummaryLineInput[];
+};
+
+/**
+ * Тело сохранения POST /finance/ledgers/{id}/summaries. mode — ответ из окна сверки:
+ * "add" — дополнение; "replace" + replace_ids — повтор, удалить показанные расходы. Без пересечений mode не нужен.
+ */
+export type ExpenseSummaryCreateInput = ExpenseSummaryCheckInput & {
+  mode?: "add" | "replace";
+  replace_ids?: number[];
+  note?: string | null;
+};
+
+/** Уже записанный расход за период в категории сводки (возможный повтор). */
+export type ExpenseSummaryMatch = {
+  transaction_id: number;
+  occurred_on: string;
+  category_id: number;
+  category_name: string;
+  amount: string;
+  description: string | null;
+  summary_id: number | null;
+};
+
+/** Итог сверки: пустой matches — пересечений нет, можно сохранять. */
+export type ExpenseSummaryCheck = {
+  period_start: string;
+  period_end: string;
+  summary_total: string;
+  existing_total: string;
+  existing_count: number;
+  matches: ExpenseSummaryMatch[];
+};
+
+/** Сохранённая сводка со строками. replaced_count — сколько расходов удалено при замене. */
+export type ExpenseSummary = {
+  id: number;
+  ledger_id: number;
+  period_start: string;
+  period_end: string;
+  note: string | null;
+  total: string;
+  created_by_user_id: number | null;
+  created_by_name: string;
+  created_at: string;
+  lines: FinanceTransaction[];
+  replaced_count: number;
 };
 
 export type CategorySummary = {
@@ -429,7 +496,12 @@ export type FinanceTransactionInput = {
   amount: number;
   occurred_on: string;
   description: string | null;
+  // Расход на цель этой же книги: сервер сам добавит запись в историю цели
+  goal_id?: number | null;
 };
+
+/** Тело PATCH операции: только меняемые поля. goal_id: null — отвязать от цели. */
+export type FinanceTransactionChanges = Partial<FinanceTransactionInput>;
 
 // ---- Справочник продуктов (шаг 65) ----
 
@@ -992,12 +1064,44 @@ export type FinanceHomeLedger = {
   household_id: number | null;
   household_name: string | null;
   currency: string;
-  // Все доходы минус все расходы по сегодняшний день
+  // Баланс-кошелёк: только фактические операции по сегодняшний день и корректировки баланса.
+  // Ожидаемые доходы и неоплаченные платежи не входят
   total: string;
-  // Свободно в текущем бюджетном периоде после обязательных платежей и трат
-  free: string;
+  // Баланс минус неоплаченные обязательные платежи до следующего основного дохода; null — дохода нет
+  free: string | null;
+  // Дата следующего основного дохода: «Свободно до 10 нояб.»
+  free_until: string | null;
+  spending_status: SpendingStatus;
+  // Текст вместо числа: «Нет следующего дохода: …», «Не хватает 600 ₽ до 31 окт»
+  spending_note: string | null;
   period_start: string;
   period_end: string;
+};
+
+/** Корректировка баланса: разница между фактическим остатком и насчитанным. amount со знаком, например "2300.00" или "-500.00". */
+export type BalanceAdjustment = {
+  id: number;
+  amount: string;
+  adjusted_on: string;
+  note: string | null;
+  created_by_user_id: number | null;
+  created_by_name: string | null;
+  created_at: string;
+};
+
+/** Баланс книги и последние корректировки (новые сначала). Ответ GET/POST /finance/ledgers/{id}/balance. */
+export type LedgerBalance = {
+  ledger_id: number;
+  currency: string;
+  total: string;
+  adjustments_total: string;
+  adjustments: BalanceAdjustment[];
+};
+
+/** Тело POST /finance/ledgers/{id}/balance: «сколько сейчас на самом деле». Пример: { actual: 52300, note: "сверка с банком" }. */
+export type BalanceSetInput = {
+  actual: number;
+  note?: string;
 };
 
 /** Совет, уже написанный словами. */
@@ -1022,12 +1126,32 @@ export type Cycle = {
   mandatory_total: string;
   other_spent: string;
   free_after_mandatory: string;
+  // Прогноз периода вместе с ожидаемым доходом. «Сколько можно тратить сейчас» — в CyclesReport.spending
   available: string;
-  daily_allowance: string | null;
   // Доля обязательных платежей в доходе: 0.78 = 78 %
   mandatory_share: number | null;
   status: "ok" | "tight" | "gap";
   items: Occurrence[];
+};
+
+/** ok — хватает; gap — не хватает; no_income — нет следующего основного дохода; income_today — доход ожидается сегодня. */
+export type SpendingStatus = "ok" | "gap" | "no_income" | "income_today";
+
+/**
+ * «Баланс → Свободно → Можно тратить в день»: один расчёт сервера для главной и «Финансы → Обзор».
+ * free = balance − mandatory_due; daily_allowance = free ÷ days_left. Ожидаемые доходы не входят.
+ * Пример: { balance: "86000.00", mandatory_due: "35000.00", free: "51000.00", next_income_on: "2026-11-10",
+ *           days_left: 13, daily_allowance: "3923.08", status: "ok", note: null }
+ */
+export type SpendingPlan = {
+  balance: string;
+  mandatory_due: string;
+  free: string | null;
+  next_income_on: string | null;
+  days_left: number | null;
+  daily_allowance: string | null;
+  status: SpendingStatus;
+  note: string | null;
 };
 
 /** Ответ GET /finance/ledgers/{id}/cycles. */
@@ -1036,6 +1160,7 @@ export type CyclesReport = {
   currency: string;
   mode: CycleMode;
   today: string;
+  spending: SpendingPlan;
   cycles: Cycle[];
   advice: AdviceItem[];
 };
@@ -1137,6 +1262,8 @@ export type FinanceGoalEntry = {
   principal_part: string | null;
   balance_after: string | null;
   note: string | null;
+  // Расход, из которого создана запись; null — взнос внесён вручную. Такая запись меняется через «Операции»
+  transaction_id: number | null;
   can_delete: boolean;
 };
 

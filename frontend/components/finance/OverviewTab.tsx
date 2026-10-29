@@ -60,7 +60,7 @@ export default function OverviewTab({ ledger, goTo }: { ledger: Ledger; goTo: (t
         </Card>
       )}
 
-      {current && <PeriodCard ledger={ledger} cycle={current} maxAmount={maxAmount} />}
+      {current && <PeriodCard ledger={ledger} cycle={current} spending={cycles.spending} maxAmount={maxAmount} />}
 
       {actionable.length > 0 && (
         <Card title="Ближайшие платежи и поступления" description="Отметьте, когда заплатили или получили: операция появится в списке, а цифры периода обновятся.">

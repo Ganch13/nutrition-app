@@ -30,7 +30,7 @@ services:
   # --- API: применяет миграции и запускает сервер; снаружи недоступен, только через Caddy ---
   backend:
     build: ../backend
-    image: nutrition-backend:1.1
+    image: nutrition-backend:1.3
     restart: unless-stopped
     depends_on:
       db:
@@ -66,7 +66,7 @@ services:
       args:
         # Сайт и API на одном домене: запросы идут на /api, Caddy передаёт их в backend
         NEXT_PUBLIC_API_URL: /api
-    image: nutrition-frontend:1.1
+    image: nutrition-frontend:1.3
     restart: unless-stopped
     depends_on:
       backend:

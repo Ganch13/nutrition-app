@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import BalanceAdjustDialog from "@/components/finance/BalanceAdjustDialog";
 import { FINANCE_CHANGED_EVENT } from "@/components/finance/IncomePromptDialog";
 import { Badge, Button, Card, EmptyState, ErrorBanner, Loading, ProgressBar } from "@/components/ui";
 import {
@@ -15,6 +16,7 @@ import {
   getTrainingSessions,
 } from "@/lib/endpoints";
 import {
+  capitalizeFirst,
   formatDateLong,
   formatDateTime,
   formatDayMonth,
@@ -98,9 +100,11 @@ export default function DashboardPage() {
 
   return (
     <>
+      {/* Шапка: только сегодняшняя дата с днём недели, крупно («Четверг, 29 октября») — без приветствия и имени */}
       <header className="mb-8">
-        <p className="text-sm text-slate-500">{formatDateLong(today)}</p>
-        <h1 className="mt-1 text-3xl font-semibold tracking-tight sm:text-4xl">Здравствуйте, {profile.name}</h1>
+        <h1 className="text-3xl font-semibold tracking-tight text-slate-900 sm:text-4xl">
+          {capitalizeFirst(formatDateLong(today))}
+        </h1>
       </header>
 
       {error && (
@@ -185,8 +189,15 @@ function MoneyBlock({ onHide }: { onHide: () => void }) {
   );
 }
 
-/** Один разрез денег: всего и свободно в периоде. item = null — финансы этой книги не включены. */
+/**
+ * Один разрез денег: баланс и свободно до следующего основного дохода. item = null — финансы этой книги не включены.
+ * «Баланс» — кошелёк: только фактические операции и корректировки. «Свободно» = баланс − обязательные платежи
+ * до следующего основного дохода (общий расчёт сервера, тот же, что во «Финансы → Обзор»).
+ * Кнопка «Изменить баланс» открывает окно, где можно ввести фактический остаток без дохода и расхода.
+ */
 function MoneySlice({ title, item }: { title: string; item: FinanceHomeLedger | null }) {
+  const [adjusting, setAdjusting] = useState(false);
+  const closeDialog = useCallback(() => setAdjusting(false), []);
   return (
     <div className="rounded-xl bg-slate-50 p-4">
       <p className="text-sm font-medium text-slate-700">{title}</p>
@@ -199,13 +210,32 @@ function MoneySlice({ title, item }: { title: string; item: FinanceHomeLedger | 
         </p>
       ) : (
         <div className="mt-2 grid grid-cols-2 gap-3">
-          <Figure caption="Всего" value={formatMoney(item.total, item.currency)} tone={Number(item.total) < 0 ? "bad" : "default"} />
-          <Figure
-            caption={`Свободно до ${formatDayMonth(item.period_end)}`}
-            value={formatMoney(item.free, item.currency)}
-            tone={Number(item.free) < 0 ? "bad" : "default"}
-          />
+          <Figure caption="Баланс" value={formatMoney(item.total, item.currency)} tone={Number(item.total) < 0 ? "bad" : "default"} />
+          {item.free === null || item.free_until === null ? (
+            // Нет следующего основного дохода: делить не на что, показываем подсказку вместо числа
+            <div className="min-w-0">
+              <p className="text-xs text-slate-500">Свободно</p>
+              <p className="mt-1 text-sm text-slate-600">{item.spending_note}</p>
+            </div>
+          ) : (
+            <div className="min-w-0">
+              <Figure
+                caption={`Свободно до ${formatDayMonth(item.free_until)}`}
+                value={formatMoney(item.free, item.currency)}
+                tone={Number(item.free) < 0 ? "bad" : "default"}
+              />
+              {item.spending_status === "gap" && <p className="mt-0.5 text-xs text-red-600">{item.spending_note}</p>}
+            </div>
+          )}
+          <div className="col-span-2 -ml-3 -mb-2">
+            <Button size="sm" variant="ghost" onClick={() => setAdjusting(true)}>
+              Изменить баланс
+            </Button>
+          </div>
         </div>
+      )}
+      {adjusting && item && (
+        <BalanceAdjustDialog ledgerId={item.ledger_id} title={title} currency={item.currency} onClose={closeDialog} />
       )}
     </div>
   );

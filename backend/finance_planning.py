@@ -10,10 +10,11 @@
 from datetime import date, timedelta
 from decimal import Decimal
 
-from sqlalchemy import and_, case, exists, func, select
+from sqlalchemy import and_, exists, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from finance_balance import ledger_balance
 from finance_format import money, period, short_date
 from finance_goals import loan_overview
 from finance_recurring import occurrence_rows, sync_recurring
@@ -163,10 +164,6 @@ def build_cycle(db: Session, access: LedgerAccess, start: date, end: date, today
     days_total = (end - start).days + 1
     days_left = (end - today).days + 1 if is_current else None
 
-    daily_allowance = None
-    if is_current and available > 0 and days_left:
-        daily_allowance = (available / days_left).quantize(CENT)
-
     share = float(mandatory_total / income_total) if income_total > 0 else None
 
     if mandatory_total > income_total or available < 0:
@@ -191,11 +188,91 @@ def build_cycle(db: Session, access: LedgerAccess, start: date, end: date, today
         "other_spent": other_spent,
         "free_after_mandatory": free_after_mandatory,
         "available": available,
-        "daily_allowance": daily_allowance,
         "mandatory_share": round(share, 4) if share is not None else None,
         "status": status,
         "items": [row.as_dict() for row in rows if row.status != "skipped"],
     }
+
+
+# Как далеко вперёд искать следующий основной доход (годовая зарплата или премия — тоже найдётся)
+NEXT_INCOME_HORIZON_DAYS = 400
+
+
+def _next_primary_income(db: Session, ledger_id: int, today: date) -> date | None:
+    """Дата следующего основного дохода, который ещё не подтверждён и не пропущен, начиная с сегодня.
+
+    Подтверждённая («Получено») или пропущенная выплата уже не ждётся, поэтому после подтверждения
+    граница переезжает на следующий основной доход. Просроченные неподтверждённые (дата раньше сегодня)
+    границей не считаются. Дополнительные доходы границ не задают.
+    Пример: зарплата 25-го, сегодня 28 октября, 25 октября подтверждена → date(2026, 11, 25).
+    Нет активных основных доходов → None.
+    """
+    rows = occurrence_rows(db, ledger_id, today, today + timedelta(days=NEXT_INCOME_HORIZON_DAYS), today)
+    dates = [row.due_on for row in rows if row.kind == "income" and row.is_primary and row.status == "pending"]
+    return min(dates) if dates else None
+
+
+def spending_plan(db: Session, access: LedgerAccess, today: date) -> dict:
+    """Единственный расчёт «Баланс → Свободно → Можно тратить в день» (SpendingPlanResponse).
+
+    Им пользуются и главная (home_overview), и «Финансы → Обзор» (get_cycles), поэтому цифры везде одинаковые.
+    Формулы:
+      balance         = реальные деньги: подтверждённые операции по сегодня и корректировки (ledger_balance);
+      mandatory_due   = неоплаченные обязательные платежи с датой от сегодня до дня перед следующим основным
+                        доходом (платёж в день дохода относится к следующему периоду);
+      free            = balance − mandatory_due;
+      days_left       = дни от сегодня до следующего основного дохода (сегодня считается, день дохода — нет);
+      daily_allowance = free ÷ days_left.
+    Ожидаемые доходы не входят никуда, пока их не подтвердят.
+
+    Пример: баланс 86 000, следующая зарплата 10 ноября, сегодня 28 октября, аренда 35 000 3 ноября →
+        {"balance": 86000, "mandatory_due": 35000, "free": 51000, "next_income_on": date(2026, 11, 10),
+         "days_left": 13, "daily_allowance": 3923.08, "status": "ok", "note": None}
+    Особые случаи (daily_allowance = None, вместо числа текст в note):
+      нет следующего основного дохода → status "no_income", free = None;
+      доход ожидается сегодня (0 дней)  → status "income_today";
+      free < 0                           → status "gap", «Не хватает N ₽».
+    """
+    ledger_id = access.ledger.id
+    currency = access.ledger.currency
+    balance = ledger_balance(db, ledger_id, today)
+    next_income = _next_primary_income(db, ledger_id, today)
+
+    plan = {
+        "balance": balance,
+        "mandatory_due": ZERO,
+        "free": None,
+        "next_income_on": next_income,
+        "days_left": None,
+        "daily_allowance": None,
+        "status": "ok",
+        "note": None,
+    }
+    if next_income is None:
+        plan["status"] = "no_income"
+        plan["note"] = "Нет следующего дохода: укажите дату основного дохода в «Платежи и доходы»"
+        return plan
+
+    days_left = (next_income - today).days  # 0, если доход ожидается сегодня
+    mandatory_due = ZERO
+    if days_left > 0:
+        rows = occurrence_rows(db, ledger_id, today, next_income - timedelta(days=1), today)
+        mandatory_due = sum(
+            (row.amount for row in rows if row.kind == "expense" and row.status == "pending"),
+            ZERO,
+        )
+    free = balance - mandatory_due
+    plan.update(mandatory_due=mandatory_due, free=free, days_left=days_left)
+
+    if free < 0:
+        plan["status"] = "gap"
+        plan["note"] = f"Не хватает {money(-free, currency)} до {short_date(next_income)}"
+    elif days_left == 0:
+        plan["status"] = "income_today"
+        plan["note"] = "Основной доход ожидается сегодня: подтвердите поступление"
+    else:
+        plan["daily_allowance"] = (free / days_left).quantize(CENT)
+    return plan
 
 
 def get_cycles(db: Session, access: LedgerAccess, today: date, previous: int, count: int) -> dict:
@@ -225,14 +302,17 @@ def get_cycles(db: Session, access: LedgerAccess, today: date, previous: int, co
 
     cycles = [build_cycle(db, access, first, last, today) for first, last in ranges]
     upcoming_cycles = [cycle for cycle in cycles if cycle["end"] >= today]
+    # «Баланс → Свободно → В день» из общего расчёта: те же цифры, что на главной
+    spending = spending_plan(db, access, today)
 
     return {
         "ledger_id": access.ledger.id,
         "currency": access.ledger.currency,
         "mode": access.ledger.cycle_mode,
         "today": today,
+        "spending": spending,
         "cycles": cycles,
-        "advice": cycle_advice(db, access, cycles, upcoming_cycles, schedules),
+        "advice": cycle_advice(db, access, cycles, upcoming_cycles, schedules, spending),
     }
 
 
@@ -246,6 +326,7 @@ def cycle_advice(
     cycles: list[dict],
     upcoming_cycles: list[dict],
     schedules: list[Schedule],
+    spending: dict,
 ) -> list[dict]:
     """Короткие советы по периодам, написанные словами. Правила простые и проверяемые:
 
@@ -328,14 +409,14 @@ def cycle_advice(
             )
             break
 
-    current = next((cycle for cycle in cycles if cycle["is_current"]), None)
-    if current is not None and current["daily_allowance"] is not None:
+    if spending["daily_allowance"] is not None:
         advice.append(
             _advice(
                 "daily_allowance",
                 "info",
-                f"После обязательных платежей и уже сделанных трат на обычные расходы до {short_date(current['end'])} "
-                f"можно тратить около {money(current['daily_allowance'], currency)} в день.",
+                f"Из денег на счетах после обязательных платежей до следующего дохода "
+                f"({short_date(spending['next_income_on'])}) можно тратить около "
+                f"{money(spending['daily_allowance'], currency)} в день.",
             )
         )
 
@@ -635,38 +716,22 @@ def simulate_payment(db: Session, access: LedgerAccess, today: date, payment: De
     }
 
 
-def _balance_until(db: Session, ledger_id: int, today: date) -> Decimal:
-    """Сколько денег в книге: все доходы минус все расходы по сегодняшний день включительно.
-
-    Пример: доходов за всё время 280 000 ₽, расходов 231 500 ₽ → 48 500 ₽.
-    """
-    signed = func.sum(
-        case(
-            (FinanceCategory.kind == "income", FinanceTransaction.amount),
-            else_=-FinanceTransaction.amount,
-        )
-    )
-    total = db.scalar(
-        select(func.coalesce(signed, 0))
-        .join(FinanceCategory, FinanceCategory.id == FinanceTransaction.category_id)
-        .where(FinanceTransaction.ledger_id == ledger_id, FinanceTransaction.occurred_on <= today)
-    )
-    return Decimal(total)
-
-
 def home_overview(db: Session, user: User, today: date) -> list[dict]:
     """Деньги для главной страницы: по одной записи на каждую книгу пользователя (FinanceHomeLedger).
 
     Личная и семейная книги считаются отдельно: личные деньги в семейный разрез не входят.
-    Пример: [{"kind": "personal", "total": 48500, "free": 12300, "period_start": date(2026, 10, 25), ...},
-             {"kind": "household", "household_name": "Семья", "total": 120000, "free": 35000, ...}]
+    Все цифры берутся из spending_plan — того же расчёта, что во «Финансы → Обзор».
+    Пример: [{"kind": "personal", "total": 86000, "free": 51000, "free_until": date(2026, 11, 10),
+              "spending_note": None, ...},
+             {"kind": "household", "household_name": "Семья", "total": 0, "free": None, "free_until": None,
+              "spending_note": "Нет следующего дохода: ...", ...}]
     """
     result = []
     for ledger in list_ledgers(db, user):
         access = get_ledger_access(db, ledger["id"], user)
         sync_recurring(db, access.ledger.id, today)
         start, end = cycle_containing(today, cycle_schedules(db, access))
-        cycle = build_cycle(db, access, start, end, today)
+        plan = spending_plan(db, access, today)
         result.append(
             {
                 "ledger_id": ledger["id"],
@@ -674,8 +739,13 @@ def home_overview(db: Session, user: User, today: date) -> list[dict]:
                 "household_id": ledger["household_id"],
                 "household_name": ledger["household_name"],
                 "currency": ledger["currency"],
-                "total": _balance_until(db, ledger["id"], today),
-                "free": cycle["available"],
+                # Баланс-кошелёк: только факты и корректировки
+                "total": plan["balance"],
+                # Баланс минус платежи до следующего основного дохода; None — дохода нет
+                "free": plan["free"],
+                "free_until": plan["next_income_on"],
+                "spending_status": plan["status"],
+                "spending_note": plan["note"],
                 "period_start": start,
                 "period_end": end,
             }
@@ -691,4 +761,5 @@ __all__ = [
     "period_summary",
     "set_cycle_mode",
     "simulate_payment",
+    "spending_plan",
 ]

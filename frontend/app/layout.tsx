@@ -35,8 +35,10 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="ru" className="h-full antialiased">
-      <body className="min-h-full">
+    // Фон записан прямо в HTML (style), а не только в CSS: пока файл стилей грузится по медленной сети,
+    // экран уже светлый фирменный, а не белый или чёрный
+    <html lang="ru" className="h-full antialiased" style={{ backgroundColor: BRAND.themeColor }}>
+      <body className="min-h-full" style={{ backgroundColor: BRAND.themeColor }}>
         {children}
         <ServiceWorkerRegister />
       </body>

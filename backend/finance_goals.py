@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from finance_errors import (
     FinancePlanError,
     GoalClosedError,
+    GoalEntryLinkedError,
     GoalEntryNotFoundError,
     GoalNotFoundError,
     GoalPermissionError,
@@ -30,7 +31,7 @@ from finance_errors import (
 from finance_format import money
 from finance_schedule import Schedule, pattern_dates
 from finance_services import DELETED_USER_NAME, LedgerAccess
-from models import FinancialGoal, FinancialGoalEntry, User
+from models import FinanceTransaction, FinancialGoal, FinancialGoalEntry, User
 from schemas import FinanceGoalCreate, FinanceGoalEntryCreate, FinanceGoalUpdate
 
 CENT = Decimal("0.01")
@@ -259,7 +260,9 @@ def get_goal_detail(db: Session, access: LedgerAccess, user: User, goal_id: int,
             "principal_part": entry.principal_part,
             "balance_after": entry.balance_after,
             "note": entry.note,
-            "can_delete": can_edit or entry.user_id == user.id,
+            # Запись из расхода удаляется только вместе с расходом (через «Операции»)
+            "transaction_id": entry.transaction_id,
+            "can_delete": entry.transaction_id is None and (can_edit or entry.user_id == user.id),
         }
         for entry in reversed(entries)
     ]
@@ -340,7 +343,11 @@ def update_goal(
 
 
 def delete_goal(db: Session, access: LedgerAccess, user: User, goal_id: int) -> None:
-    """Удаляет цель вместе с историей взносов (автор цели или управляющий)."""
+    """Удаляет цель вместе с историей взносов (автор цели или управляющий).
+
+    Расходы, которые были отнесены к цели, остаются в «Операциях» как обычные расходы:
+    удаляется только их запись в истории цели, баланс не меняется.
+    """
     goal = get_goal(db, access, goal_id)
     if not _can_edit(access, user, goal):
         raise GoalPermissionError
@@ -415,6 +422,8 @@ def delete_entry(
     entry = db.get(FinancialGoalEntry, entry_id)
     if entry is None or entry.goal_id != goal.id:
         raise GoalEntryNotFoundError
+    if entry.transaction_id is not None:
+        raise GoalEntryLinkedError
     if not (_can_edit(access, user, goal) or entry.user_id == user.id):
         raise GoalPermissionError
 
@@ -428,6 +437,78 @@ def delete_entry(
         raise
 
     return get_goal_detail(db, access, user, goal.id, today)
+
+
+# ---------------------------------------------------------------------------
+# Расходы, отнесённые к цели (пункт 2 ТЗ от 29.10.2026)
+# Функции без commit: их вызывает finance_transactions.py внутри одной транзакции с самой операцией,
+# чтобы операция и запись в цели сохранялись или откатывались вместе.
+# ---------------------------------------------------------------------------
+
+
+def link_expense(
+    db: Session,
+    access: LedgerAccess,
+    goal_id: int,
+    transaction: FinanceTransaction,
+    today: date,
+) -> FinancialGoal:
+    """Создаёт в цели запись из расхода: та же сумма, дата и автор, описание расхода — в примечание.
+
+    У накопления прогресс растёт, у долга и кредита остаток уменьшается (replay пересчитывает проценты).
+    Цель ищется в книге операции (get_goal), поэтому личную цель нельзя выбрать в семейной книге
+    и наоборот — получится GoalNotFoundError (404).
+    Пример: расход 5 000 ₽ 28 октября «Отложил с зарплаты» → цель «Отпуск»: накоплено 15 000 → 20 000.
+    Ошибки (вызывающий откатывает транзакцию): дата в будущем, закрытый долг или кредит,
+    платёж больше остатка (PaymentTooLargeError). transaction должна быть уже в сессии (после flush).
+    """
+    goal = get_goal(db, access, goal_id)
+    if transaction.occurred_on > today:
+        raise FinancePlanError("Расход на цель не может быть в будущем: укажите сегодняшнюю или прошедшую дату")
+
+    entries = _entries_of(db, [goal.id])[goal.id]
+    if goal.kind != "savings" and goal_numbers(goal, entries)["done"]:
+        raise GoalClosedError
+
+    entry = FinancialGoalEntry(
+        goal_id=goal.id,
+        user_id=transaction.created_by_user_id,
+        paid_on=transaction.occurred_on,
+        amount=transaction.amount,
+        note=transaction.description,
+        transaction_id=transaction.id,
+    )
+    db.add(entry)
+    db.flush()
+    replay(goal, [*entries, entry], access.ledger.currency)
+    return goal
+
+
+def unlink_expense(db: Session, access: LedgerAccess, transaction_id: int) -> None:
+    """Убирает из цели запись, созданную расходом, и пересчитывает цель (если такая запись есть).
+
+    Пример: удалили расход 5 000 ₽ на «Отпуск» → накоплено 20 000 → 15 000.
+    Вызывается перед удалением или изменением операции.
+    """
+    entry = db.scalar(select(FinancialGoalEntry).where(FinancialGoalEntry.transaction_id == transaction_id))
+    if entry is None:
+        return
+    goal = db.get(FinancialGoal, entry.goal_id)
+    db.delete(entry)
+    db.flush()
+    replay(goal, _entries_of(db, [goal.id])[goal.id], access.ledger.currency)
+
+
+def linked_goal_ids(db: Session, transaction_ids: list[int]) -> dict[int, tuple[int, str]]:
+    """Цели операций: {id операции: (id цели, название)}. Пример: {12: (3, "Отпуск")}."""
+    if not transaction_ids:
+        return {}
+    rows = db.execute(
+        select(FinancialGoalEntry.transaction_id, FinancialGoal.id, FinancialGoal.name)
+        .join(FinancialGoal, FinancialGoal.id == FinancialGoalEntry.goal_id)
+        .where(FinancialGoalEntry.transaction_id.in_(transaction_ids))
+    ).all()
+    return {transaction_id: (goal_id, name) for transaction_id, goal_id, name in rows}
 
 
 def loan_overview(db: Session, ledger_id: int) -> list[dict]:

@@ -22,9 +22,7 @@ from finance_services import (
     TransactionNotFoundError,
     create_category,
     create_ledger,
-    create_transaction,
     delete_category,
-    delete_transaction,
     get_ledger_access,
     get_summary,
     list_categories,
@@ -33,14 +31,21 @@ from finance_services import (
     set_budget,
 )
 from finance_recurring import sync_recurring
+from finance_summaries import check_summary, create_summary, delete_summary, list_summaries
+from finance_transactions import create_transaction, delete_transaction, update_transaction
 from models import User
 from schemas import (
+    ExpenseSummaryCheck,
+    ExpenseSummaryCheckResponse,
+    ExpenseSummaryCreate,
+    ExpenseSummaryResponse,
     FinanceBudgetSet,
     FinanceCategoryCreate,
     FinanceCategoryResponse,
     FinanceSummaryResponse,
     FinanceTransactionCreate,
     FinanceTransactionResponse,
+    FinanceTransactionUpdate,
     LedgerCreate,
     LedgerResponse,
 )
@@ -182,8 +187,27 @@ def create_transaction_endpoint(
     access: LedgerAccess = Depends(get_access),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    today: date = Depends(get_today),
 ):
-    return create_transaction(db, access, current_user, data)
+    """Добавляет операцию. С goal_id расход сразу попадает в цель:
+    {"category_id": 9, "amount": 5000, "occurred_on": "2026-10-28", "goal_id": 3}."""
+    return create_transaction(db, access, current_user, data, today)
+
+
+@router.patch("/ledgers/{ledger_id}/transactions/{transaction_id}", response_model=FinanceTransactionResponse)
+def update_transaction_endpoint(
+    transaction_id: int,
+    data: FinanceTransactionUpdate,
+    access: LedgerAccess = Depends(get_access),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    today: date = Depends(get_today),
+):
+    """Меняет операцию; запись в цели меняется вместе с ней.
+
+    Примеры тела: {"amount": 3000}; {"goal_id": 2} (другая цель); {"goal_id": null} (без цели).
+    """
+    return update_transaction(db, access, current_user, transaction_id, data, today)
 
 
 @router.delete("/ledgers/{ledger_id}/transactions/{transaction_id}", status_code=204)
@@ -194,6 +218,60 @@ def delete_transaction_endpoint(
     current_user: User = Depends(get_current_user),
 ):
     delete_transaction(db, access, current_user, transaction_id)
+
+
+# ---------------------------------------------------------------------------
+# Сводные расходы за период (день, неделя, месяц, свои даты)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/ledgers/{ledger_id}/summaries/check", response_model=ExpenseSummaryCheckResponse)
+def check_summary_endpoint(
+    data: ExpenseSummaryCheck,
+    access: LedgerAccess = Depends(get_access),
+    db: Session = Depends(get_db),
+    today: date = Depends(get_today),
+):
+    """Сверка сводки с уже записанными расходами. Ничего не сохраняет.
+
+    Пример тела: {"period_start": "2026-10-20", "period_end": "2026-10-26",
+                  "lines": [{"category_id": 3, "amount": 8000}]}
+    Непустой matches — показать «Это дополнение или повтор?».
+    """
+    return check_summary(db, access, data, today)
+
+
+@router.post("/ledgers/{ledger_id}/summaries", response_model=ExpenseSummaryResponse, status_code=201)
+def create_summary_endpoint(
+    data: ExpenseSummaryCreate,
+    access: LedgerAccess = Depends(get_access),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    today: date = Depends(get_today),
+):
+    """Сохраняет сводку. При пересечении без mode — 409; mode="add" — дополнение;
+    mode="replace" + replace_ids — повтор: удаляются показанные при сверке расходы."""
+    return create_summary(db, access, current_user, data, today)
+
+
+@router.get("/ledgers/{ledger_id}/summaries", response_model=list[ExpenseSummaryResponse])
+def list_summaries_endpoint(
+    access: LedgerAccess = Depends(get_access),
+    db: Session = Depends(get_db),
+):
+    """Последние сводки книги со строками."""
+    return list_summaries(db, access)
+
+
+@router.delete("/ledgers/{ledger_id}/summaries/{summary_id}", status_code=204)
+def delete_summary_endpoint(
+    summary_id: int,
+    access: LedgerAccess = Depends(get_access),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Удаляет сводку целиком; баланс и цели откатываются."""
+    delete_summary(db, access, current_user, summary_id)
 
 
 @router.put("/ledgers/{ledger_id}/budgets/{category_id}", status_code=204)

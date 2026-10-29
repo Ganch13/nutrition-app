@@ -2,7 +2,7 @@
 
 Веб-приложение для личного и семейного планирования питания, тренировок, режима дня и физического прогресса. Объединяет цели, расписание, питание и тренировки, чтобы предлагать реалистичный план с учётом рабочего дня, сна, тренировок и семейных дел. Рассчитано на нескольких пользователей в одной семье (Household): у каждого свои цели и расписание, а меню и закупки можно вести вместе.
 
-Версия **1.1.0**. Название в интерфейсе, вкладке браузера и установленном приложении — «Лад» (где оно хранится и как его поменять: [frontend/DESIGN.md](frontend/DESIGN.md)). История изменений: [CHANGELOG.md](CHANGELOG.md).
+Версия **1.3.0**. Название в интерфейсе, вкладке браузера и установленном приложении — «Лад» (где оно хранится и как его поменять: [frontend/DESIGN.md](frontend/DESIGN.md)). История изменений: [CHANGELOG.md](CHANGELOG.md).
 
 ## Что умеет
 
@@ -98,6 +98,8 @@ npm run build                   # полная сборка, как на сер�
 
 Нужен Docker Desktop.
 
+**Проверка доработки перед выкладкой на сервер.** Отдельное окружение `lad-local` со своей базой и своими настройками: `.\local\lad-local.cmd up -Seed`, затем <http://localhost:3100>. Команды, демо-данные и список того, что проверить, описаны в [local/README.md](local/README.md).
+
 ```powershell
 copy .env.example .env          # откройте .env и впишите POSTGRES_PASSWORD и JWT_SECRET_KEY
 docker compose up -d --build
@@ -109,7 +111,7 @@ docker compose up -d --build
 
 ```powershell
 docker compose build
-docker save -o lad-images.tar nutrition-backend:1.1 nutrition-frontend:1.1
+docker save -o lad-images.tar nutrition-backend:1.3 nutrition-frontend:1.3
 ```
 
 На компьютере друга (установлен Docker Desktop):

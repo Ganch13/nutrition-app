@@ -231,19 +231,37 @@ async function sendRequest(
   return response;
 }
 
+/** Тексты, когда ответа от сервера нет совсем (код 0). Их же показывает страница public/offline.html. */
+export const NO_INTERNET_TEXT = "Нет подключения к интернету. Проверьте Wi-Fi или мобильную сеть.";
+export const SERVER_DOWN_TEXT = "Сервер недоступен, попробуйте позже.";
+
+/** Сколько ждать обычный ответ сервера и загрузку файла (фото), миллисекунды. */
+const REQUEST_TIMEOUT_MS = 20_000;
+const UPLOAD_TIMEOUT_MS = 120_000;
+
+/**
+ * Ошибка «ответа нет»: у устройства нет сети (navigator.onLine === false) — «Нет подключения к интернету»;
+ * сеть есть, но сервер выключен, недоступен или не ответил вовремя — «Сервер недоступен, попробуйте позже».
+ */
 function serverUnavailable(): ApiError {
-  return new ApiError(0, "Нет связи с сервером. Проверьте интернет и повторите попытку.");
+  const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+  return new ApiError(0, offline ? NO_INTERNET_TEXT : SERVER_DOWN_TEXT);
 }
 
 /**
  * Ограничение по времени для запроса: если сервер молчит дольше, запрос прерывается, и человек видит ошибку
- * с кнопкой «Повторить», а не бесконечную загрузку (так бывает на плохой мобильной связи).
+ * с кнопкой «Повторить», а не бесконечную загрузку (так бывает на плохой мобильной связи и через VPN).
  * Загрузка файлов (фото) идёт дольше, поэтому ей даётся больше времени.
+ * В старых браузерах без AbortSignal.timeout то же делается вручную через AbortController и таймер.
  */
 function requestTimeout(options: RequestInit): AbortSignal | undefined {
-  if (typeof AbortSignal === "undefined" || typeof AbortSignal.timeout !== "function") return undefined;
+  if (typeof AbortController === "undefined") return undefined;
   const isUpload = options.body instanceof Blob || options.body instanceof ArrayBuffer;
-  return AbortSignal.timeout(isUpload ? 120_000 : 30_000);
+  const ms = isUpload ? UPLOAD_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
+  if (typeof AbortSignal.timeout === "function") return AbortSignal.timeout(ms);
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), ms);
+  return controller.signal;
 }
 
 /**

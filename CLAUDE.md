@@ -35,6 +35,10 @@ npm run build
 
 Весь стек в Docker: скопировать `.env.example` → `.env` (задать `POSTGRES_PASSWORD`, `JWT_SECRET_KEY`), затем `docker compose up -d --build`.
 
+Локальная проверка перед выкладкой (обязательна для каждой доработки, ТЗ от 29.10.2026, п. 6): отдельный проект `lad-local` в `local/` — своя база, свои случайные ключи в `local/.env`, порты 3100/8100, контейнеры `lad-local-X.Y.Z-*`. Команды из корня: `.\local\lad-local.cmd up | up -Seed | seed | reset [-Seed] | down | purge | status | logs [сервис]` (`.cmd` обходит ExecutionPolicy). Демо-данные — `backend/dev_seed.py` через API (`demo@example.com` / `demo-password-123`), при `ENVIRONMENT=production` не запускается. В конце каждой доработки — пересборка `lad-local` и раздел «Что проверить» в `local/README.md`.
+
+Открытые задачи и технический долг — `docs/OPEN_TASKS.md` (обновлять при закрытии сессии).
+
 ## Архитектура бэкенда
 
 Модульный монолит, один слой на файл для каждого домена (schedule, food, norms, recipe, meal_plan, shopping, family_plan, photo, household, finance, auth):
@@ -44,6 +48,12 @@ npm run build
 - Сопоставление ошибок: каждый routes-модуль определяет словарь `{ExceptionClass: (status_code, "русский текст")}` и функцию `register_error_handlers(app)`, которая вызывает `error_handling.register_error_map`. `main.py` обязан вызвать функцию регистрации каждого модуля — при добавлении нового routes-модуля подключай и `include_router`, и регистрацию обработчиков ошибок.
 - `schemas.py` — все Pydantic v2 модели запросов и ответов; `models.py` — все модели SQLAlchemy (по одному файлу, а не по файлу на домен).
 - Финансы разделены дальше: `finance_services.py` (книги учёта, категории, транзакции), `finance_recurring.py`, `finance_schedule.py`, `finance_planning.py` (бюджетные циклы «от дохода до дохода», нагрузка), `finance_goals.py`; эндпоинты в `finance_routes.py` и `finance_plan_routes.py`.
+- Доходы никогда не начисляются автоматически: `auto_post` разрешён только для платежей (`sync_recurring` фильтрует `kind == "expense"`), а доход подтверждается через `confirm_occurrence` по запросу `GET /finance/income-prompts` (окно ±2 дня от плановой даты, `PROMPT_WINDOW_DAYS` в `finance_recurring.py`). У доходов нет `end_on`. Общие правила проверки правила — `schemas.check_rule_schedule`, она же вызывается в `update_rule` после слияния полей.
+- «Всего» (баланс-кошелёк) считает только `finance_balance.ledger_balance`: операции с датой ≤ сегодня (подтверждённые доходы, траты, автосписания — автосписание считается фактом) плюс корректировки `FinanceBalanceAdjustment` («на самом деле столько-то», `POST /finance/ledgers/{id}/balance`). Корректировки не входят в отчёты, лимиты и бюджетные периоды. Ожидаемые доходы и неоплаченные платежи в «Всего» не входят. «Свободно» и «Можно тратить в день» считает только `finance_planning.spending_plan` (источник правды для `/finance/home` и `cycles.spending`): свободно = баланс − неоплаченные обязательные платежи от сегодня до дня перед следующим неподтверждённым основным доходом, в день = свободно ÷ дни до него. Ожидаемый доход не учитывается до подтверждения. `build_cycle.available` — только прогноз периода для лент и сравнения.
+- Расход на цель: связь хранится только в `FinancialGoalEntry.transaction_id` (у операции своего `goal_id` нет). Создание, правка и удаление операций — `finance_transactions.py`; запись в цели ведут `finance_goals.link_expense`/`unlink_expense` (без commit, одной транзакцией с операцией). Запись «из расхода» нельзя удалить из истории цели (409). `finance_services` не может импортировать `finance_goals` — циклический импорт.
+- Сводка расходов (`finance_summaries.py`, `FinanceExpenseSummary`): строки — обычные операции с `summary_id` и датой `period_end`, поэтому баланс, отчёты и цели считают их как расходы. При пересечении с уже записанными расходами тех же категорий (без операций правил и расходов на цели) сервер без `mode` отвечает 409; `mode="add"` ничего не удаляет, `mode="replace"` удаляет только `replace_ids`, показанные при сверке (`POST .../summaries/check`). Сам сервер ничего не складывает и не удаляет.
+- Границы бюджетного периода задают только правила дохода с `is_primary=True`; дополнительные входят в суммы периода. `monthly_equivalent` возвращает `None` для `biweekly` (среднее не показываем); для оценки нагрузки есть `typical_month_amount` (две выплаты в месяц).
+- Расписание: два события не могут пересекаться, кроме случая «контейнер (`is_container`) + не-контейнер целиком внутри него». Правило одно для создания, изменения и серий — `schedule_services.check_overlaps`; при нарушении `ScheduleOverlapError` → 409 с текстом. Любой новый код, создающий или меняющий `ScheduleEvent`, обязан вызывать `check_overlaps`. Вложенность не хранится: `parent_id` вычисляется в недельном виде.
 
 Контроль доступа:
 - `access.py`: `require_same_user` (зависимость для маршрутов `/users/{user_id}/...`) и `require_household_member(household_id, db, user, allowed_roles)`; роли в семье: `owner`, `admin`, `member`. Роутеры импортируют из `access.py`, никогда из `main.py` (`main` импортирует роутеры).
@@ -60,11 +70,15 @@ npm run build
 - `lib/api.ts` — единственный HTTP-клиент: хранит access-токен в `sessionStorage`, прозрачно вызывает `/auth/refresh` при 401 (с дедупликацией) и превращает ошибки в `ApiError` с русскими сообщениями. `lib/endpoints.ts` — единственное место, где пишутся URL эндпоинтов: новые вызовы API добавляй туда, а типы — в `lib/types.ts`.
 - Общие элементы интерфейса лежат в `components/ui.tsx` (`Card`, `Button`, `TextField`, `Notice`, …), иконки — в `components/icons.tsx`; используй их повторно вместо новых разовых компонентов.
 - Дизайн-токены (цвета `brand-*`, `saffron`, `good-*`, шрифты Inter/Lora, отдаваемые локально из `public/fonts` из-за CSP) находятся в `app/globals.css` в `@theme`. Название приложения, правила палитры и порядок перегенерации иконок и заставок описаны в `frontend/DESIGN.md` — следуй ему при работе над интерфейсом и при переименованиях.
-- PWA: `app/manifest.ts`, `public/sw.js` (увеличь версию его кэша, чтобы сбросить кэш у клиентов), `public/offline.html`.
+- PWA: `app/manifest.ts`, `public/sw.js` (увеличь версию его кэша, чтобы сбросить кэш у клиентов), `public/offline.html`. При открытии страницы sw.js ждёт сервер 20 с; при ошибке сети, тайм-ауте или 502/503/504 отдаёт `offline.html` из кэша, а она сама выбирает текст «Нет подключения к интернету» / «Сервер недоступен, попробуйте позже» по `navigator.onLine`. Те же тексты в `lib/api.ts` (`NO_INTERNET_TEXT`, `SERVER_DOWN_TEXT`); запросы к API ограничены 20 с, заставка (`SplashScreen`) сдаётся через 30 с.
+- Скрытые блоки главной хранятся в профиле (`users.home_hidden_blocks`, меняются через `PATCH /users/{id}`); работать с ними через `lib/home-blocks.ts::useHomeBlocks`, а плашку «Вернуть на главную» в разделе — `components/HomeBlockReturn.tsx`. Новый блок главной = значение в `HomeBlock` (schemas.py и types.ts) + место возврата в его разделе.
+- Время событий расписания вводится и показывается по часовому поясу профиля (`zonedToIso`, `dateInZone`, `formatTimeInZone`), а не устройства. Старые хелперы `localInputValue`/`toIsoFromLocal` работают по поясу устройства — для расписания их не использовать.
+- Правило линтера `react-hooks/set-state-in-effect` включено: не вызывать `setState` в теле `useEffect`. Загрузку делать через `useAsyncData`, сброс состояния — через `key`, начальное значение из URL — ленивым инициализатором `useState` (если первый показ всё равно «Загрузка»).
+- Событие окна `lad:finance-changed` (`FINANCE_CHANGED_EVENT` в `components/finance/IncomePromptDialog.tsx`) сообщает, что поступление подтверждено; блоки, зависящие от денег, подписываются на него и перезагружаются.
 
 ## Релиз и деплой
 
-Версия (сейчас 1.1.0) указана в `backend/main.py`, `frontend/package.json`, тегах образов в compose-файлах и `CHANGELOG.md`. Чек-лист перед релизом: `RELEASE.md`; деплой, обновление и резервное копирование на сервере: `deploy/README.md`, `deploy/UPDATE.md`, `deploy/BACKUP.md`.
+Версия указана в `backend/main.py`, `frontend/package.json` и `package-lock.json`, тегах `image:` в трёх compose-файлах и в `local/docker-compose.yml` (теги `lad-*:X.Y.Z-local` и имена контейнеров `lad-local-X.Y.Z-*`), корневом `README.md` (строка «Версия» и команда `docker save`) и `CHANGELOG.md`. Поднимать тег образа нужно ДО сборки на сервере: `deploy.sh` собирает под тегом из `deploy/docker-compose.prod.yml`, и с прежним тегом старые образы для отката перезаписываются. Миграции, меняющие данные, не откатываются `alembic downgrade` полностью — откат релиза = код из снимка + восстановление базы из копии (`deploy/BACKUP.md`). Чек-лист перед релизом: `RELEASE.md`; деплой, обновление и резервное копирование на сервере: `deploy/README.md`, `deploy/UPDATE.md`, `deploy/BACKUP.md`.
 
 Файлы `test_db.py` / `test_security.py` в корне — старые ручные скрипты, не входящие в набор тестов.
 
@@ -94,5 +108,12 @@ npm run build
 
 ### Окружение
 - Windows 11, PyCharm, PowerShell; путь проекта `C:\Users\user\PycharmProjects\nutrition-app`.
-- PostgreSQL для разработки — в контейнере Docker Desktop (тестовая БД `nutrition_test`).
+- PostgreSQL для разработки — в контейнере Docker Desktop `nutrition-postgres` (тестовая БД `nutrition_test`). Если тесты падают с `Connection refused` на 5432 — контейнер остановлен: `docker start nutrition-postgres`. Проверять миграции на копии: `CREATE DATABASE nutrition_migcheck TEMPLATE nutrition;` в этом контейнере, `DATABASE_URL=...nutrition_migcheck`, затем `DROP DATABASE`.
+- `tests/test_hardening.py` (4 варианта) и `tests/test_sessions.py` (3 теста) падают и без изменений: кодировка консоли и старая проблема окна refresh. Описание в `docs/OPEN_TASKS.md`; новые падения сравнивать с этими 7.
+- Python-скрипты с кириллицей и путями Windows не передавать через Bash-heredoc: `\U` в `C:\Users` ломает строку («truncated \UXXXXXXXX escape»). Сохранять скрипт файлом в scratchpad и запускать `python -I файл`.
 - Продакшен: арендованный сервер Ubuntu (1 ядро, 2 ГБ), Docker Compose + Caddy, домен через Cloudflare, доступ по SSH. Резервные копии — `deploy/BACKUP.md`.
+- PowerShell блокирует `.venv\Scripts\Activate.ps1` (ExecutionPolicy). Без активации: `.venv\Scripts\python.exe -m pytest` / `-m alembic` / `-m uvicorn`; либо `Set-ExecutionPolicy -Scope Process Bypass` на время окна.
+- Длинные heredoc с кириллицей в Bash-инструменте ломаются; патч-скрипты сохранять файлом в scratchpad и запускать оттуда.
+- Устаревший `frontend/.next/dev/types` может ссылаться на удалённые маршруты и ломать `npm run build`; эта папка генерируется `next dev`, её можно удалить.
+- Папка копий на сервере `/var/backups/nutrition` принадлежит uid 10001 (режим 750): читать через `sudo ls` или `docker compose ... exec backup ls /backups`.
+- На сервере работает fail2ban: несколько неудачных SSH-подключений подряд блокируют IP (симптом `kex_exchange_identification: Connection closed`); снять — через консоль провайдера `sudo fail2ban-client set sshd unbanip IP`.

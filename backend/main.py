@@ -47,7 +47,7 @@ validate_settings()
 _docs_on = docs_enabled()
 app = FastAPI(
     title="Nutrition & Training Planner API",
-    version="1.1.0",
+    version="1.3.0",
     docs_url="/docs" if _docs_on else None,
     redoc_url="/redoc" if _docs_on else None,
     openapi_url="/openapi.json" if _docs_on else None,

@@ -1,14 +1,23 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { Button, Card, EmptyState, ErrorBanner, IconButton, Loading, Spinner } from "@/components/ui";
+import { Button, Card, EmptyState, ErrorBanner, IconButton, Loading, Segmented, Spinner } from "@/components/ui";
 import { getErrorText } from "@/lib/api";
-import { deleteFinanceTransaction, getCycles, getFinanceCategories, getFinanceTransactions, getPeriodSummary } from "@/lib/endpoints";
-import { formatMoney, formatWeekdayDayMonth, shiftMonth, todayInZone } from "@/lib/format";
+import {
+  deleteExpenseSummary,
+  deleteFinanceTransaction,
+  getCycles,
+  getFinanceCategories,
+  getFinanceGoals,
+  getFinanceTransactions,
+  getPeriodSummary,
+} from "@/lib/endpoints";
+import { capitalizeFirst, formatMoney, formatWeekdayDayMonth, shiftMonth, todayInZone } from "@/lib/format";
 import { useProfile } from "@/lib/profile-context";
 import type { FinanceTransaction, Ledger } from "@/lib/types";
 import { useAsyncData } from "@/lib/use-async-data";
 import { formatPeriod, Stat } from "./shared";
+import SummaryForm from "./SummaryForm";
 import TransactionForm from "./TransactionForm";
 
 /** Месяцы, которые задевает период: ("2026-10-28", "2026-11-09") → ["2026-10", "2026-11"]. */
@@ -23,16 +32,13 @@ function monthsBetween(start: string, end: string): string[] {
 }
 
 /**
- * Вкладка «Операции»: листать периоды назад, добавить операцию, посмотреть и удалить записи.
+ * Вкладка «Операции»: листать периоды назад, добавить операцию, посмотреть, изменить и удалить записи.
+ * Расход можно отнести к цели: правка и удаление такого расхода сами правят цель.
+ * Вместо отдельных покупок можно внести «Сводку за период» (SummaryForm) или сочетать оба способа.
  * Период — календарный месяц или промежуток между поступлениями дохода (по настройке книги).
  * Операции сервер отдаёт по месяцам, поэтому для периода, который пересекает границу месяцев,
  * запрашиваются оба месяца, а лишние даты отбрасываются здесь.
  */
-/** Делает первую букву заглавной: «ср, 28 окт.» → «Ср, 28 окт.». */
-function capitalizeFirst(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
 export default function OperationsTab({ ledger }: { ledger: Ledger }) {
   const { profile } = useProfile();
   const today = todayInZone(profile.timezone);
@@ -43,27 +49,34 @@ export default function OperationsTab({ ledger }: { ledger: Ledger }) {
     // Запрос previous=N&count=1 возвращает все периоды от N-го назад до текущего; нужный из них первый
     const report = await getCycles(ledger.id, back, 1);
     const period = report.cycles[0];
-    const [summary, categories, ...monthLists] = await Promise.all([
+    // Цели книги — варианты поля «Цель» в форме расхода (загружаются каждый раз, поэтому новая цель видна сразу)
+    const [summary, categories, goals, ...monthLists] = await Promise.all([
       getPeriodSummary(ledger.id, period.start),
       getFinanceCategories(ledger.id),
+      getFinanceGoals(ledger.id),
       ...monthsBetween(period.start, period.end).map((month) => getFinanceTransactions(ledger.id, month)),
     ]);
     const transactions = monthLists
       .flat()
       .filter((item) => item.occurred_on >= period.start && item.occurred_on <= period.end)
       .sort((a, b) => (a.occurred_on === b.occurred_on ? b.id - a.id : a.occurred_on < b.occurred_on ? 1 : -1));
-    return { period, summary, categories, transactions };
+    return { period, summary, categories, goals, transactions };
   }, [ledger.id, ledger.cycle_mode, back]);
   const { data, error, loading, reload } = useAsyncData(load);
 
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmId, setConfirmId] = useState<number | null>(null);
+  // Операция, открытая для правки (форма под строкой); null — ничего не правится
+  const [editId, setEditId] = useState<number | null>(null);
+  // Как вносить траты: отдельной покупкой или сводкой за период
+  const [entryMode, setEntryMode] = useState<"single" | "summary">("single");
 
   /** Удаляет операцию и обновляет список. */
-  async function handleDelete(transaction: FinanceTransaction) {
+  async function handleDelete(transaction: FinanceTransaction, wholeSummary = false) {
     setActionError(null);
     try {
-      await deleteFinanceTransaction(ledger.id, transaction.id);
+      if (wholeSummary && transaction.summary_id !== null) await deleteExpenseSummary(ledger.id, transaction.summary_id);
+      else await deleteFinanceTransaction(ledger.id, transaction.id);
       setConfirmId(null);
       reload();
     } catch (err) {
@@ -110,7 +123,31 @@ export default function OperationsTab({ ledger }: { ledger: Ledger }) {
         <Stat label="Итого" value={money(data.summary.balance)} tone={Number(data.summary.balance) < 0 ? "bad" : "default"} />
       </div>
 
-      {back === 0 && <TransactionForm ledgerId={ledger.id} categories={data.categories} today={today} onAdded={reload} />}
+      {back === 0 && (
+        <div className="space-y-4">
+          <Segmented
+            label="Как внести траты"
+            value={entryMode}
+            onChange={(value) => setEntryMode(value as "single" | "summary")}
+            options={[
+              ["single", "Покупка"],
+              ["summary", "Сводка за период"],
+            ]}
+          />
+          {entryMode === "single" ? (
+            <TransactionForm ledgerId={ledger.id} categories={data.categories} goals={data.goals} today={today} onDone={reload} />
+          ) : (
+            <SummaryForm
+              ledgerId={ledger.id}
+              currency={ledger.currency}
+              categories={data.categories}
+              goals={data.goals}
+              today={today}
+              onDone={reload}
+            />
+          )}
+        </div>
+      )}
 
       <Card title="Операции">
         {groups.length === 0 ? (
@@ -132,6 +169,14 @@ export default function OperationsTab({ ledger }: { ledger: Ledger }) {
                         <div className="flex items-center justify-between gap-3">
                           <div className="min-w-0">
                             <p className="truncate font-medium text-slate-900">{transaction.category_name}</p>
+                            {transaction.summary_start && transaction.summary_end && (
+                              <p className="truncate text-xs font-medium text-slate-600">
+                                Сводка {formatPeriod(transaction.summary_start, transaction.summary_end)}
+                              </p>
+                            )}
+                            {transaction.goal_name && (
+                              <p className="truncate text-xs font-medium text-brand-700">→ цель «{transaction.goal_name}»</p>
+                            )}
                             {(transaction.description || ledger.kind === "household") && (
                               <p className="truncate text-xs text-slate-500">
                                 {transaction.description}
@@ -146,6 +191,19 @@ export default function OperationsTab({ ledger }: { ledger: Ledger }) {
                               {money(transaction.amount)}
                             </p>
                             {canDelete && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                aria-label={`Изменить операцию «${transaction.category_name}»`}
+                                onClick={() => {
+                                  setConfirmId(null);
+                                  setEditId(editId === transaction.id ? null : transaction.id);
+                                }}
+                              >
+                                Изменить
+                              </Button>
+                            )}
+                            {canDelete && (
                               <IconButton
                                 icon="trash"
                                 tone="danger"
@@ -155,12 +213,35 @@ export default function OperationsTab({ ledger }: { ledger: Ledger }) {
                             )}
                           </div>
                         </div>
+                        {editId === transaction.id && (
+                          <TransactionForm
+                            key={transaction.id}
+                            ledgerId={ledger.id}
+                            categories={data.categories}
+                            goals={data.goals}
+                            today={today}
+                            transaction={transaction}
+                            onDone={() => {
+                              setEditId(null);
+                              reload();
+                            }}
+                            onCancel={() => setEditId(null)}
+                          />
+                        )}
                         {confirmId === transaction.id && (
                           <div className="mt-2 flex flex-wrap items-center gap-3 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">
-                            <span>Удалить операцию? Если она создана из повторяющегося платежа, платёж отметится пропущенным.</span>
+                            <span>
+                              Удалить операцию? Если она создана из повторяющегося платежа, платёж отметится пропущенным.
+                              {transaction.goal_name && ` Сумма уйдёт и из цели «${transaction.goal_name}».`}
+                            </span>
                             <Button size="sm" variant="danger-solid" onClick={() => handleDelete(transaction)}>
-                              Удалить
+                              {transaction.summary_id !== null ? "Удалить строку" : "Удалить"}
                             </Button>
+                            {transaction.summary_id !== null && (
+                              <Button size="sm" variant="danger" onClick={() => handleDelete(transaction, true)}>
+                                Удалить всю сводку
+                              </Button>
+                            )}
                             <Button size="sm" variant="secondary" onClick={() => setConfirmId(null)}>
                               Отмена
                             </Button>

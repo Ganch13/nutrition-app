@@ -95,7 +95,8 @@ def test_cycle_numbers_add_up(client, today):
         headers=user["headers"],
     )
 
-    current = cycles(client, user, ledger, count=1)["cycles"][0]
+    report = cycles(client, user, ledger, count=1)
+    current = report["cycles"][0]
     assert (current["start"], current["end"]) == ("2026-10-25", "2026-11-09")
     # В этом периоде зарплата 25 октября уже получена, аванс 10 ноября придёт уже в следующем
     assert dec(current["income_received"]) == Decimal("90000")
@@ -109,7 +110,14 @@ def test_cycle_numbers_add_up(client, today):
     assert dec(current["available"]) == Decimal("51000")
     # До 9 ноября включительно с сегодняшним днём: 28, 29, 30, 31 октября и 1–9 ноября = 13 дней
     assert current["days_left"] == 13
-    assert dec(current["daily_allowance"]) == (Decimal("51000") / 13).quantize(Decimal("0.01"))
+    # «Можно тратить в день» — из общего расчёта: баланс 86 000 − аренда 35 000 = 51 000 на 13 дней до аванса
+    spending = report["spending"]
+    assert dec(spending["balance"]) == Decimal("86000")
+    assert dec(spending["mandatory_due"]) == Decimal("35000")
+    assert dec(spending["free"]) == Decimal("51000")
+    assert (spending["next_income_on"], spending["days_left"]) == ("2026-11-10", 13)
+    assert dec(spending["daily_allowance"]) == (Decimal("51000") / 13).quantize(Decimal("0.01"))
+    assert spending["status"] == "ok"
     assert current["mandatory_share"] == round(35000 / 90000, 4)
     assert current["status"] == "ok"
     kinds = {(item["rule_name"], item["status"]) for item in current["items"]}
@@ -187,6 +195,10 @@ def test_no_cash_gap_advice_when_everything_fits(client, today):
     switch_mode(client, user, ledger, "income")
     advice = cycles(client, user, ledger, count=3)["advice"]
     assert all(item["code"] != "cash_gap" for item in advice)
+    # Пока зарплата не подтверждена, денег на счетах нет — совета «сколько в день» тоже нет
+    assert all(item["code"] != "daily_allowance" for item in advice)
+    confirm_income(client, user, ledger, "Зарплата", "2026-10-25")
+    advice = cycles(client, user, ledger, count=3)["advice"]
     assert any(item["code"] == "daily_allowance" for item in advice)
 
 

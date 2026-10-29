@@ -959,8 +959,98 @@ class FinanceTransaction(Base):
 
     description: Mapped[str | None] = mapped_column(String(250), nullable=True)
 
+    # Сводка за период, строкой которой является операция («Продукты 8 000 за 1–7 ноября»); пусто — обычная операция.
+    # Строки сводки удаляются вместе с ней (finance_summaries.delete_summary; CASCADE — страховка)
+    summary_id: Mapped[int | None] = mapped_column(
+        ForeignKey("finance_expense_summaries.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+
     # Кто внёс операцию (важно в семейной книге). Если автор удалил аккаунт, поле становится пустым:
     # операция остаётся в семейной книге, а в интерфейсе подписана «Удалённый пользователь»
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class FinanceExpenseSummary(Base):
+    """Сводка расходов за период: несколько строк «категория — сумма», внесённых за один раз.
+
+    Пункт 5 ТЗ от 29.10.2026: вместо отдельных покупок можно внести итог за день, неделю, месяц или свои даты.
+    Сами строки — обычные операции (FinanceTransaction.summary_id) с датой period_end, поэтому баланс,
+    отчёты, лимиты и цели считают их так же, как отдельные расходы.
+    Пример: period_start=2026-10-20, period_end=2026-10-26, строки «Продукты 8 000», «Транспорт 1 200».
+    """
+
+    __tablename__ = "finance_expense_summaries"
+
+    __table_args__ = (
+        CheckConstraint("period_start <= period_end", name="ck_finance_expense_summaries_period"),
+        Index("ix_finance_expense_summaries_ledger_period", "ledger_id", "period_start", "period_end"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    ledger_id: Mapped[int] = mapped_column(ForeignKey("ledgers.id", ondelete="CASCADE"), nullable=False)
+
+    # Первый и последний день периода (оба включаются)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+
+    # Пояснение, например «Чеки за неделю»
+    note: Mapped[str | None] = mapped_column(String(250), nullable=True)
+
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class FinanceBalanceAdjustment(Base):
+    """Корректировка баланса книги: «на счетах на самом деле столько-то» без дохода и расхода.
+
+    Хранится разница между фактическим остатком и тем, что насчитало приложение. Она входит
+    только в «Всего» (баланс), но не в отчёты о доходах и расходах, лимиты и бюджетные периоды.
+    Пример: приложение насчитало 50 000 ₽, человек ввёл 52 300 ₽ → amount = Decimal("2300.00").
+    Если ввёл 49 000 ₽ → amount = Decimal("-1000.00").
+    """
+
+    __tablename__ = "finance_balance_adjustments"
+
+    __table_args__ = (
+        # Нулевая корректировка ничего не меняет, такую не сохраняем
+        CheckConstraint("amount <> 0", name="ck_finance_balance_adjustments_amount_nonzero"),
+        Index("ix_finance_balance_adjustments_ledger_date", "ledger_id", "adjusted_on"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    # Книга удаляется — её корректировки тоже
+    ledger_id: Mapped[int] = mapped_column(ForeignKey("ledgers.id", ondelete="CASCADE"), nullable=False)
+
+    # Разница со знаком: плюс — денег больше, чем насчитано, минус — меньше
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+
+    # День, на который сделана сверка (сегодня по часовому поясу пользователя)
+    adjusted_on: Mapped[date] = mapped_column(Date, nullable=False)
+
+    # Пояснение, например «сверка с банком»
+    note: Mapped[str | None] = mapped_column(String(250), nullable=True)
+
     created_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
@@ -1227,6 +1317,16 @@ class FinancialGoalEntry(Base):
     balance_after: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
 
     note: Mapped[str | None] = mapped_column(String(250), nullable=True)
+
+    # Расход, из которого создана запись (пункт 2 ТЗ от 29.10.2026): «Расход 5 000 → цель „Отпуск“».
+    # Пусто — взнос внесён вручную в самой цели. Одна операция даёт не больше одной записи (unique).
+    # Правка и удаление такой записи идут только через операцию (finance_transactions.py);
+    # CASCADE — страховка, чтобы запись не пережила свою операцию.
+    transaction_id: Mapped[int | None] = mapped_column(
+        ForeignKey("finance_transactions.id", ondelete="CASCADE"),
+        nullable=True,
+        unique=True,
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

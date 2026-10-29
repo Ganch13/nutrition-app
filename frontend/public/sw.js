@@ -1,25 +1,32 @@
 // Service worker приложения «Лад» (PWA).
 //
 // Что он делает:
-//   * когда нет интернета и пользователь открывает страницу, показывает понятную страницу /offline.html
-//     вместо ошибки браузера;
+//   * когда нет интернета, сервер выключен или молчит дольше NAVIGATION_TIMEOUT_MS, при открытии страницы
+//     показывает понятную страницу /offline.html из кэша вместо пустого экрана или ошибки браузера.
+//     Сама страница выбирает текст: «Нет подключения к интернету» (у устройства нет сети) или
+//     «Сервер недоступен, попробуйте позже» (сеть есть, а сервер не отвечает), и даёт кнопку «Повторить»;
 //   * запоминает неизменяемые файлы сайта (/_next/static/...), поэтому приложение открывается быстрее.
 //
 // Чего он НЕ делает намеренно: не кэширует ответы API и страницы, не хранит никаких личных данных.
 // Данные всегда берутся с сервера, поэтому после выхода из аккаунта на устройстве ничего не остаётся.
 
-const VERSION = "v2";
+const VERSION = "v4";
 // Два отдельных кэша: страница «нет соединения» не должна вытесняться файлами сайта при очистке
 const OFFLINE_CACHE = `lad-offline-${VERSION}`;
 const STATIC_CACHE = `lad-static-${VERSION}`;
 const OFFLINE_URL = "/offline.html";
 // Сколько файлов держать в кэше; при переполнении удаляются самые старые (после обновлений сайта файлы меняются)
 const MAX_STATIC_ENTRIES = 150;
+// Сколько ждать сервер при открытии страницы. Дольше — показываем «Сервер недоступен» вместо вечной загрузки
+const NAVIGATION_TIMEOUT_MS = 20_000;
+// Ответы прокси (Caddy), когда сам сервер приложения выключен или не отвечает
+const SERVER_DOWN_STATUSES = [502, 503, 504];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches
       .open(OFFLINE_CACHE)
+      // Страница ошибки самодостаточна: стили, значок и скрипт записаны прямо в ней
       .then((cache) => cache.add(OFFLINE_URL))
       // Новая версия начинает работать сразу, не дожидаясь закрытия всех вкладок
       .then(() => self.skipWaiting()),
@@ -51,6 +58,25 @@ async function trim(cache) {
   }
 }
 
+/**
+ * Открытие страницы. Пример: сервер ответил за 2 с → его страница; сервер выключен (сеть есть, но соединение
+ * не устанавливается), прокси ответил 502 или прошло 20 с без ответа → /offline.html из кэша.
+ * Обычные ответы сервера (в том числе 404) показываются как есть.
+ */
+async function navigate(request) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), NAVIGATION_TIMEOUT_MS);
+  try {
+    const response = await fetch(request, { signal: controller.signal });
+    if (!SERVER_DOWN_STATUSES.includes(response.status)) return response;
+  } catch {
+    // Нет сети, сервер не принимает соединения или истёк тайм-аут
+  } finally {
+    clearTimeout(timer);
+  }
+  return (await caches.match(OFFLINE_URL)) ?? Response.error();
+}
+
 self.addEventListener("fetch", (event) => {
   const request = event.request;
 
@@ -62,9 +88,9 @@ self.addEventListener("fetch", (event) => {
   // Чужие адреса (в том числе backend на другом порту) и API на этом же домене — напрямую в сеть
   if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
 
-  // Открытие страницы: всегда с сервера; если сети нет — страница «нет соединения»
+  // Открытие страницы: всегда с сервера; если сервер недоступен — страница ошибки из кэша
   if (request.mode === "navigate") {
-    event.respondWith(fetch(request).catch(async () => (await caches.match(OFFLINE_URL)) ?? Response.error()));
+    event.respondWith(navigate(request));
     return;
   }
 

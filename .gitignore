@@ -14,6 +14,7 @@ tsconfig.tsbuildinfo
 
 # --- Сервер и резервные копии: секреты и данные не должны попадать в Git ---
 deploy/.env
+local/.env
 *.dump
 *.sha256
 *.tar

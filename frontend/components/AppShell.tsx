@@ -97,7 +97,16 @@ export default function AppShell({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [moreOpen]);
 
-  // Пока профиля нет: заставка или ошибка (с кнопкой повтора)
+  // Профиль не загрузился (нет интернета, сервер недоступен): когда сеть вернётся, пробуем снова сами
+  const failed = profile === null && error !== null;
+  useEffect(() => {
+    if (!failed) return;
+    window.addEventListener("online", reload);
+    return () => window.removeEventListener("online", reload);
+  }, [failed, reload]);
+
+  // Пока профиля нет: заставка или ошибка (с кнопкой повтора).
+  // Текст ошибки из lib/api.ts: «Нет подключения к интернету…» или «Сервер недоступен, попробуйте позже.»
   if (profile === null) {
     if (!error) return <SplashScreen onRetry={reload} />;
     return (

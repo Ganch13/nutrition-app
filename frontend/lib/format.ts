@@ -221,6 +221,11 @@ export function shiftDate(date: string, days: number): string {
   return shifted.toISOString().slice(0, 10);
 }
 
+/** Делает первую букву заглавной: «четверг, 29 октября» → «Четверг, 29 октября». Пустая строка остаётся пустой. */
+export function capitalizeFirst(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 /** "2026-10-26" → "понедельник, 26 октября". */
 export function formatDateLong(date: string): string {
   return new Date(`${date}T12:00:00Z`).toLocaleDateString("ru-RU", {

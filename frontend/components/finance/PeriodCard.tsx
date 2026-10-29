@@ -1,6 +1,6 @@
 import { Badge, Card } from "@/components/ui";
 import { formatDayMonth, formatMoney, plural } from "@/lib/format";
-import type { Cycle, Ledger } from "@/lib/types";
+import type { Cycle, Ledger, SpendingPlan } from "@/lib/types";
 import CycleStrip from "./CycleStrip";
 import { formatPeriod, Stat } from "./shared";
 
@@ -15,37 +15,54 @@ export function CycleStatusBadge({ cycle }: { cycle: Cycle }) {
 }
 
 /**
+ * Метка «хватает ли денег» по общему расчёту spending (как на главной): ожидаемый доход не считается,
+ * поэтому «Хватает» показывается только если реальных денег хватает до следующего основного дохода.
+ */
+function SpendingStatusBadge({ spending, cycle }: { spending: SpendingPlan; cycle: Cycle }) {
+  if (spending.status === "gap") return <Badge tone="red">Не хватает денег</Badge>;
+  if (spending.status === "no_income") return <Badge tone="amber">Нет следующего дохода</Badge>;
+  if (spending.status === "income_today") return <Badge tone="amber">Доход сегодня</Badge>;
+  return <CycleStatusBadge cycle={cycle} />;
+}
+
+/**
  * Карточка текущего бюджетного периода: главная цифра («сколько можно тратить в день»), лента периода
  * и четыре показателя. Периодом может быть календарный месяц или промежуток между поступлениями дохода,
  * это настраивается на вкладке «Настройки».
+ *
+ * Главная цифра и плитка «Останется» берутся из spending — общего расчёта сервера (тот же, что на главной):
+ *   Останется (свободно) = баланс − обязательные платежи до следующего основного дохода;
+ *   Можно тратить в день = свободно ÷ дни до следующего основного дохода.
+ * Ожидаемый, ещё не подтверждённый доход в эти цифры не входит. Пример: баланс 0, ждём зарплату 70 000 →
+ * «Можно тратить в день: 0 ₽», а не 23 333 ₽.
  */
-export function PeriodCard({ ledger, cycle, maxAmount }: { ledger: Ledger; cycle: Cycle; maxAmount: number }) {
+export function PeriodCard({
+  ledger,
+  cycle,
+  spending,
+  maxAmount,
+}: {
+  ledger: Ledger;
+  cycle: Cycle;
+  spending: SpendingPlan;
+  maxAmount: number;
+}) {
   const money = (value: string | number) => formatMoney(value, ledger.currency);
-  const available = Number(cycle.available);
   const daysLeft = cycle.days_left;
+  const free = spending.free === null ? null : Number(spending.free);
 
-  // Главная цифра: что важнее всего знать прямо сейчас
-  let heroLabel: string;
-  let heroValue: string;
-  let heroNote: string | null = null;
+  // Главная цифра: что важнее всего знать прямо сейчас. heroValue = null — вместо числа текст из spending.note
+  let heroLabel = "Можно тратить в день";
+  let heroValue: string | null = null;
+  let heroNote: string | null = spending.note;
   let heroBad = false;
-  if (cycle.is_current && cycle.daily_allowance !== null) {
-    heroLabel = "Можно тратить в день";
-    heroValue = money(cycle.daily_allowance);
-    if (daysLeft !== null) {
-      heroNote = `до ${formatDayMonth(cycle.end)}, ${daysLeft} ${plural(daysLeft, ["день", "дня", "дней"])}`;
-    }
-  } else if (available < 0) {
-    heroLabel = "Не хватает до конца периода";
-    heroValue = money(-available);
+  if (spending.daily_allowance !== null && spending.next_income_on !== null && spending.days_left !== null) {
+    heroValue = money(spending.daily_allowance);
+    heroNote = `до ${formatDayMonth(spending.next_income_on)}, ${spending.days_left} ${plural(spending.days_left, ["день", "дня", "дней"])}`;
+  } else if (spending.status === "gap" && free !== null) {
+    heroLabel = "Не хватает до следующего дохода";
+    heroValue = money(-free);
     heroBad = true;
-  } else if (cycle.is_current) {
-    heroLabel = "Свободных денег в периоде не осталось";
-    heroValue = money(0);
-    heroBad = true;
-  } else {
-    heroLabel = "Останется после обязательных платежей";
-    heroValue = money(cycle.free_after_mandatory);
   }
 
   return (
@@ -54,12 +71,14 @@ export function PeriodCard({ ledger, cycle, maxAmount }: { ledger: Ledger; cycle
       description={`${formatPeriod(cycle.start, cycle.end)}${
         daysLeft !== null ? `, осталось ${daysLeft} ${plural(daysLeft, ["день", "дня", "дней"])}` : ""
       }`}
-      action={<CycleStatusBadge cycle={cycle} />}
+      action={<SpendingStatusBadge spending={spending} cycle={cycle} />}
     >
       <div className="mb-6">
         <p className="text-sm text-slate-500">{heroLabel}</p>
-        <p className={`figure num mt-1 text-4xl sm:text-5xl ${heroBad ? "text-red-600" : "text-slate-900"}`}>{heroValue}</p>
-        {heroNote && <p className="mt-1 text-sm text-slate-500">{heroNote}</p>}
+        {heroValue !== null && (
+          <p className={`figure num mt-1 text-4xl sm:text-5xl ${heroBad ? "text-red-600" : "text-slate-900"}`}>{heroValue}</p>
+        )}
+        {heroNote && <p className={heroValue === null ? "mt-1 text-base font-medium text-slate-700" : "mt-1 text-sm text-slate-500"}>{heroNote}</p>}
       </div>
 
       <CycleStrip cycle={cycle} maxAmount={maxAmount} currency={ledger.currency} />
@@ -76,7 +95,12 @@ export function PeriodCard({ ledger, cycle, maxAmount }: { ledger: Ledger; cycle
           note={Number(cycle.mandatory_pending) > 0 ? `впереди ${money(cycle.mandatory_pending)}` : undefined}
         />
         <Stat label="Обычные траты" value={money(cycle.other_spent)} />
-        <Stat label="Останется" value={money(cycle.available)} tone={available < 0 ? "bad" : "default"} />
+        <Stat
+          label="Останется"
+          value={free === null ? "—" : money(free)}
+          note={free === null ? "нет следующего дохода" : "из денег на счетах после платежей"}
+          tone={free !== null && free < 0 ? "bad" : "default"}
+        />
       </div>
     </Card>
   );

@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#f4f5fb" />
     <meta name="color-scheme" content="light" />
     <meta name="robots" content="noindex" />
-    <title>Нет соединения — Лад</title>
+    <title>Сервер недоступен — Лад</title>
     <style>
       /* Эта страница показывается без интернета, поэтому все стили и значок записаны прямо в ней */
       :root { color-scheme: light; }
@@ -27,8 +27,11 @@
       svg { display: block; width: 72px; height: 72px; margin: 0 auto 24px; }
       h1 { margin: 0 0 8px; font-family: Georgia, "Times New Roman", serif; font-size: 26px; font-weight: 600; }
       p { margin: 0 auto 28px; color: #5c6382; line-height: 1.55; }
-      a {
+      button {
         display: inline-block;
+        border: 0;
+        cursor: pointer;
+        font: inherit;
         min-width: 160px;
         padding: 13px 24px;
         border-radius: 14px;
@@ -37,7 +40,8 @@
         font-weight: 600;
         text-decoration: none;
       }
-      a:focus-visible { outline: 3px solid #7c8ae3; outline-offset: 3px; }
+      button:focus-visible { outline: 3px solid #7c8ae3; outline-offset: 3px; }
+      button[disabled] { opacity: 0.7; cursor: progress; }
     </style>
   </head>
   <body>
@@ -53,9 +57,44 @@
         <path d="M142 372 C186 372 206 330 220 264 C234 198 244 148 300 148 C346 148 366 164 366 196 V372" fill="none" stroke="#fff" stroke-width="52" stroke-linecap="round" stroke-linejoin="round" />
         <circle cx="296" cy="312" r="28" fill="#f2a22e" />
       </svg>
-      <h1>Нет соединения</h1>
-      <p>Приложению нужен интернет, чтобы показать ваши данные. Проверьте подключение и попробуйте снова.</p>
-      <a href="/">Повторить</a>
+      <h1 id="title">Сервер недоступен, попробуйте позже</h1>
+      <p id="text">Сервер приложения сейчас не отвечает. Ваши данные в сохранности: как только он заработает, всё откроется как обычно.</p>
+      <button id="retry" type="button">Повторить</button>
     </main>
+    <script>
+      // Страницу показывает service worker (sw.js), когда страница приложения не открылась:
+      // нет интернета, сервер выключен или не ответил за 20 секунд. Здесь выбираем, что сказать человеку.
+      (function () {
+        var title = document.getElementById("title");
+        var text = document.getElementById("text");
+        var retry = document.getElementById("retry");
+
+        // navigator.onLine === false значит, что у самого устройства нет сети (Wi-Fi и мобильные данные выключены)
+        function describe() {
+          if (navigator.onLine === false) {
+            document.title = "Нет подключения к интернету — Лад";
+            title.textContent = "Нет подключения к интернету";
+            text.textContent = "Проверьте Wi-Fi или мобильную сеть. Как только связь появится, приложение откроется само.";
+          } else {
+            document.title = "Сервер недоступен — Лад";
+            title.textContent = "Сервер недоступен, попробуйте позже";
+            text.textContent = "Сервер приложения сейчас не отвечает. Ваши данные в сохранности: как только он заработает, всё откроется как обычно.";
+          }
+        }
+
+        // «Повторить» заново открывает тот же адрес: если сервер ответит, появится приложение
+        function reload() {
+          retry.disabled = true;
+          retry.textContent = "Пробуем…";
+          window.location.reload();
+        }
+
+        describe();
+        retry.addEventListener("click", reload);
+        window.addEventListener("offline", describe);
+        // Сеть вернулась — пробуем сами, без нажатия
+        window.addEventListener("online", reload);
+      })();
+    </script>
   </body>
 </html>

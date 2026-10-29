@@ -4,13 +4,15 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from models import (
+    FinanceBalanceAdjustment,
     FinanceBudget,
     FinanceCategory,
+    FinanceExpenseSummary,
     FinanceRecurringOccurrence,
     FinanceRecurringRule,
     FinanceTransaction,
@@ -21,7 +23,7 @@ from models import (
     Ledger,
     User,
 )
-from schemas import FinanceCategoryCreate, FinanceTransactionCreate, LedgerCreate
+from schemas import FinanceCategoryCreate, LedgerCreate
 
 # Категории, которые создаются вместе с книгой
 DEFAULT_EXPENSE_CATEGORIES = [
@@ -137,8 +139,14 @@ def transaction_to_dict(
     category_name: str,
     kind: str,
     author_name: str,
+    goal: tuple[int, str] | None = None,
+    summary: FinanceExpenseSummary | None = None,
 ) -> dict:
-    """Собирает данные операции для ответа API (FinanceTransactionResponse)."""
+    """Собирает данные операции для ответа API (FinanceTransactionResponse).
+
+    goal — цель, к которой отнесён расход: (3, "Отпуск") или None.
+    summary — сводка, строкой которой является операция (её период подписывается «Сводка 20–26 окт»), или None.
+    """
     return {
         "id": transaction.id,
         "ledger_id": transaction.ledger_id,
@@ -151,6 +159,11 @@ def transaction_to_dict(
         "created_by_user_id": transaction.created_by_user_id,
         "created_by_name": author_name or DELETED_USER_NAME,
         "created_at": transaction.created_at,
+        "goal_id": goal[0] if goal else None,
+        "goal_name": goal[1] if goal else None,
+        "summary_id": summary.id if summary else None,
+        "summary_start": summary.period_start if summary else None,
+        "summary_end": summary.period_end if summary else None,
     }
 
 
@@ -319,14 +332,26 @@ def delete_category(db: Session, access: LedgerAccess, category_id: int) -> None
 
 
 def list_transactions(db: Session, access: LedgerAccess, month: str) -> list[dict]:
-    """Операции книги за месяц ("2026-10"): сначала новые."""
+    """Операции книги за месяц ("2026-10"): сначала новые. У расходов на цель — id и название цели."""
     first_day, next_month = month_bounds(month)
 
     statement = (
-        select(FinanceTransaction, FinanceCategory.name, FinanceCategory.kind, User.name)
+        select(
+            FinanceTransaction,
+            FinanceCategory.name,
+            FinanceCategory.kind,
+            User.name,
+            FinancialGoal.id,
+            FinancialGoal.name,
+            FinanceExpenseSummary,
+        )
         .select_from(FinanceTransaction)
         .join(FinanceCategory, FinanceCategory.id == FinanceTransaction.category_id)
         .outerjoin(User, User.id == FinanceTransaction.created_by_user_id)
+        # Запись в цели, созданная этим расходом (если есть), и сама цель
+        .outerjoin(FinancialGoalEntry, FinancialGoalEntry.transaction_id == FinanceTransaction.id)
+        .outerjoin(FinancialGoal, FinancialGoal.id == FinancialGoalEntry.goal_id)
+        .outerjoin(FinanceExpenseSummary, FinanceExpenseSummary.id == FinanceTransaction.summary_id)
         .where(
             FinanceTransaction.ledger_id == access.ledger.id,
             FinanceTransaction.occurred_on >= first_day,
@@ -336,68 +361,15 @@ def list_transactions(db: Session, access: LedgerAccess, month: str) -> list[dic
     )
 
     return [
-        transaction_to_dict(transaction, category_name, kind, author_name)
-        for transaction, category_name, kind, author_name in db.execute(statement).all()
+        transaction_to_dict(
+            transaction, category_name, kind, author_name, (goal_id, goal_name) if goal_id else None, summary
+        )
+        for transaction, category_name, kind, author_name, goal_id, goal_name, summary in db.execute(statement).all()
     ]
 
 
-def create_transaction(
-    db: Session,
-    access: LedgerAccess,
-    user: User,
-    data: FinanceTransactionCreate,
-) -> dict:
-    """Добавляет операцию. Доступно любому, кто имеет доступ к книге."""
-    category = get_category(db, access, data.category_id)
-
-    transaction = FinanceTransaction(
-        ledger_id=access.ledger.id,
-        category_id=category.id,
-        amount=data.amount,
-        occurred_on=data.occurred_on,
-        description=data.description,
-        created_by_user_id=user.id,
-    )
-
-    try:
-        db.add(transaction)
-        db.commit()
-        db.refresh(transaction)
-    except SQLAlchemyError:
-        db.rollback()
-        raise
-
-    return transaction_to_dict(transaction, category.name, category.kind, user.name)
-
-
-def delete_transaction(
-    db: Session,
-    access: LedgerAccess,
-    user: User,
-    transaction_id: int,
-) -> None:
-    """Удаляет операцию: свою может любой участник, чужую только управляющий."""
-    transaction = db.get(FinanceTransaction, transaction_id)
-
-    if transaction is None or transaction.ledger_id != access.ledger.id:
-        raise TransactionNotFoundError
-
-    if not access.can_manage and transaction.created_by_user_id != user.id:
-        raise FinancePermissionError
-
-    try:
-        # Если операцию создало повторяющееся правило, отметка не пропадает, а становится «пропущено»:
-        # иначе правило со следующей проверкой создало бы такую же операцию заново
-        db.execute(
-            update(FinanceRecurringOccurrence)
-            .where(FinanceRecurringOccurrence.transaction_id == transaction.id)
-            .values(status="skipped", transaction_id=None)
-        )
-        db.delete(transaction)
-        db.commit()
-    except SQLAlchemyError:
-        db.rollback()
-        raise
+# Создание, изменение и удаление операций — в finance_transactions.py: там же связь расхода с целью
+# (этот модуль не может импортировать finance_goals, иначе получится циклический импорт).
 
 
 def set_budget(
@@ -524,7 +496,9 @@ def delete_ledger_data(db: Session, ledger_id: int) -> None:
     db.execute(delete(FinanceRecurringRule).where(FinanceRecurringRule.ledger_id == ledger_id))
     db.execute(delete(FinancialGoalEntry).where(FinancialGoalEntry.goal_id.in_(goal_ids)))
     db.execute(delete(FinancialGoal).where(FinancialGoal.ledger_id == ledger_id))
+    db.execute(delete(FinanceBalanceAdjustment).where(FinanceBalanceAdjustment.ledger_id == ledger_id))
     db.execute(delete(FinanceBudget).where(FinanceBudget.ledger_id == ledger_id))
     db.execute(delete(FinanceTransaction).where(FinanceTransaction.ledger_id == ledger_id))
+    db.execute(delete(FinanceExpenseSummary).where(FinanceExpenseSummary.ledger_id == ledger_id))
     db.execute(delete(FinanceCategory).where(FinanceCategory.ledger_id == ledger_id))
     db.execute(delete(Ledger).where(Ledger.id == ledger_id))

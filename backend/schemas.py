@@ -863,12 +863,38 @@ class FinanceCategoryResponse(BaseModel):
 class FinanceTransactionCreate(BaseModel):
     """Новая операция, например:
     {"category_id": 3, "amount": 120.5, "occurred_on": "2026-10-26", "description": "Магазин"}
+    Расход на цель (накопление, долг, кредит этой же книги):
+    {"category_id": 9, "amount": 5000, "occurred_on": "2026-10-28", "goal_id": 1}
     """
 
     category_id: int = Field(gt=0)
     amount: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
     occurred_on: date
     description: str | None = Field(default=None, max_length=250)
+    # Цель, к которой отнесён расход: сервер сам создаст запись в её истории на ту же сумму
+    goal_id: int | None = Field(default=None, gt=0)
+
+
+class FinanceTransactionUpdate(BaseModel):
+    """Изменение операции: передаются только меняемые поля.
+
+    Примеры: {"amount": 3000}; {"goal_id": 2} (перенести на другую цель); {"goal_id": null} (отвязать от цели);
+    {"description": null} (очистить описание). Запись в цели пересчитывается вместе с операцией.
+    """
+
+    category_id: int | None = Field(default=None, gt=0)
+    amount: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=2)
+    occurred_on: date | None = None
+    description: str | None = Field(default=None, max_length=250)
+    goal_id: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_required(self):
+        # Сумму, дату и категорию очистить нельзя: у операции они обязательны
+        for field in ("category_id", "amount", "occurred_on"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"Поле {field} нельзя очистить")
+        return self
 
 
 class FinanceTransactionResponse(BaseModel):
@@ -884,6 +910,102 @@ class FinanceTransactionResponse(BaseModel):
     created_by_user_id: int | None
     created_by_name: str
     created_at: datetime
+    # Цель, к которой отнесён расход, например 3 и "Отпуск"; None — без цели
+    goal_id: int | None = None
+    goal_name: str | None = None
+    # Сводка, строкой которой является операция, и её период («Сводка 20–26 окт»); None — обычная операция
+    summary_id: int | None = None
+    summary_start: date | None = None
+    summary_end: date | None = None
+
+
+class ExpenseSummaryLine(BaseModel):
+    """Строка сводки: категория расходов, сумма и (необязательно) цель. Пример: {"category_id": 3, "amount": 8000}."""
+
+    category_id: int = Field(gt=0)
+    amount: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
+    goal_id: int | None = Field(default=None, gt=0)
+
+
+class ExpenseSummaryCheck(BaseModel):
+    """Сводка для сверки: период и строки. Пример:
+    {"period_start": "2026-10-20", "period_end": "2026-10-26",
+     "lines": [{"category_id": 3, "amount": 8000}, {"category_id": 5, "amount": 1200}]}
+    """
+
+    period_start: date
+    period_end: date
+    lines: list[ExpenseSummaryLine] = Field(min_length=1, max_length=30)
+
+    @model_validator(mode="after")
+    def validate_period(self):
+        if self.period_start > self.period_end:
+            raise ValueError("Начало периода позже конца")
+        if (self.period_end - self.period_start).days > 366:
+            raise ValueError("Сводка — не больше чем за год")
+        return self
+
+
+class ExpenseSummaryCreate(ExpenseSummaryCheck):
+    """Сводка к сохранению. mode — ответ из окна сверки, если за период уже есть расходы:
+      "add" — добавить как дополнение (ничего не удалять);
+      "replace" — это повтор: удалить ровно replace_ids (операции, показанные при сверке) и записать сводку.
+    Без пересечений mode не нужен. Пример: {..., "mode": "replace", "replace_ids": [12, 15], "note": "Чеки"}
+    """
+
+    mode: Literal["add", "replace"] | None = None
+    replace_ids: list[int] = Field(default_factory=list, max_length=500)
+    note: str | None = Field(default=None, max_length=250)
+
+    @model_validator(mode="after")
+    def validate_replace(self):
+        if self.mode == "replace" and not self.replace_ids:
+            raise ValueError("Для замены нужен список заменяемых операций (replace_ids)")
+        if self.mode != "replace" and self.replace_ids:
+            raise ValueError("replace_ids передаются только вместе с mode=replace")
+        return self
+
+
+class ExpenseSummaryMatch(BaseModel):
+    """Уже записанный расход за период, который совпадает с категорией сводки."""
+
+    transaction_id: int
+    occurred_on: date
+    category_id: int
+    category_name: str
+    amount: Decimal
+    description: str | None
+    # Если это строка прежней сводки — её id (повторно внесённая сводка тоже считается повтором)
+    summary_id: int | None
+
+
+class ExpenseSummaryCheckResponse(BaseModel):
+    """Итог сверки. Пример: {"summary_total": "9200.00", "existing_total": "6400.00", "existing_count": 3,
+    "matches": [...]} — интерфейс спрашивает «Это дополнение или повтор?». Пустой matches — пересечений нет."""
+
+    period_start: date
+    period_end: date
+    summary_total: Decimal
+    existing_total: Decimal
+    existing_count: int
+    matches: list[ExpenseSummaryMatch]
+
+
+class ExpenseSummaryResponse(BaseModel):
+    """Сохранённая сводка со строками (операциями)."""
+
+    id: int
+    ledger_id: int
+    period_start: date
+    period_end: date
+    note: str | None
+    total: Decimal
+    created_by_user_id: int | None
+    created_by_name: str
+    created_at: datetime
+    lines: list[FinanceTransactionResponse]
+    # Сколько операций удалено при замене («повтор»); 0 — ничего не удалялось
+    replaced_count: int = 0
 
 
 class FinanceBudgetSet(BaseModel):
@@ -2029,8 +2151,11 @@ class IncomePromptResponse(BaseModel):
 class FinanceHomeLedger(BaseModel):
     """Деньги одной книги для главной страницы: сколько всего и сколько свободно в текущем периоде.
 
-    total — все доходы минус все расходы книги по сегодняшний день включительно.
-    free — сколько свободно в текущем бюджетном периоде после обязательных платежей и трат (как «available»).
+    total — баланс, «кошелёк»: только фактические операции по сегодняшний день включительно
+            (подтверждённые доходы, расходы, автосписания) плюс корректировки баланса.
+            Ожидаемые доходы и ещё не оплаченные платежи сюда не входят.
+    free — баланс минус неоплаченные обязательные платежи до следующего основного дохода (spending_plan);
+           ожидаемые доходы не учитываются, пока их не подтвердят.
     """
 
     ledger_id: int
@@ -2039,9 +2164,62 @@ class FinanceHomeLedger(BaseModel):
     household_name: str | None
     currency: str
     total: Decimal
-    free: Decimal
+    # Баланс минус обязательные платежи до следующего основного дохода; None — следующего дохода нет
+    free: Decimal | None
+    # Дата следующего основного дохода: «Свободно до 10 ноя»
+    free_until: date | None
+    spending_status: Literal["ok", "gap", "no_income", "income_today"]
+    # Текст вместо числа для особых случаев (см. SpendingPlanResponse.note)
+    spending_note: str | None
     period_start: date
     period_end: date
+
+
+class BalanceSet(BaseModel):
+    """«Сколько сейчас на самом деле»: фактический остаток книги. Пример: {"actual": 52300, "note": "сверка с банком"}.
+
+    Сервер сам считает разницу с текущим «Всего» и сохраняет её как корректировку.
+    Остаток может быть отрицательным (например, ушли в минус по кредитке).
+    """
+
+    actual: Decimal = Field(ge=-9_999_999_999, le=9_999_999_999, max_digits=12, decimal_places=2)
+    note: str | None = Field(default=None, max_length=250)
+
+    @field_validator("note")
+    @classmethod
+    def strip_note(cls, value: str | None) -> str | None:
+        # Пустое пояснение храним как отсутствующее
+        value = value.strip() if value else None
+        return value or None
+
+
+class BalanceAdjustmentResponse(BaseModel):
+    """Одна корректировка. Пример: {"id": 4, "amount": "2300.00", "adjusted_on": "2026-10-29",
+    "note": "сверка с банком", "created_by_user_id": 1, "created_by_name": "Даня", "created_at": "..."}."""
+
+    id: int
+    # Разница со знаком: плюс — денег оказалось больше насчитанного, минус — меньше
+    amount: Decimal
+    adjusted_on: date
+    note: str | None
+    created_by_user_id: int | None
+    created_by_name: str | None
+    created_at: datetime
+
+
+class LedgerBalanceResponse(BaseModel):
+    """Баланс книги и последние корректировки (новые сначала).
+
+    Пример: {"ledger_id": 1, "currency": "RUB", "total": "52300.00", "adjustments_total": "2300.00",
+             "adjustments": [{"id": 4, "amount": "2300.00", ...}]}
+    """
+
+    ledger_id: int
+    currency: str
+    total: Decimal
+    # Сумма всех корректировок: на сколько «Всего» отличается от простой суммы операций
+    adjustments_total: Decimal
+    adjustments: list[BalanceAdjustmentResponse]
 
 
 class LedgerCycleUpdate(BaseModel):
@@ -2076,10 +2254,9 @@ class CycleResponse(BaseModel):
     other_spent: Decimal
     # Доход минус обязательные платежи (до обычных трат)
     free_after_mandatory: Decimal
-    # Доход минус обязательные платежи минус обычные траты
+    # Прогноз периода: доход (вместе с ожидаемым) минус обязательные платежи минус обычные траты.
+    # Для «сколько можно тратить сейчас» используется не он, а SpendingPlanResponse (только реальные деньги)
     available: Decimal
-    # Сколько можно тратить в день до конца текущего периода; None для других периодов или если денег нет
-    daily_allowance: Decimal | None
     # Доля обязательных платежей в доходе (1.0 = 100 %); None, если дохода нет
     mandatory_share: float | None
     # ok — запас есть, tight — обязательные платежи занимают больше 70 % дохода, gap — не хватает денег
@@ -2087,11 +2264,37 @@ class CycleResponse(BaseModel):
     items: list[OccurrenceResponse]
 
 
+class SpendingPlanResponse(BaseModel):
+    """«Баланс → Свободно → Можно тратить в день»: один расчёт для главной и «Финансы → Обзор».
+
+    balance — реальные деньги (подтверждённые операции по сегодня и корректировки);
+    mandatory_due — неоплаченные обязательные платежи от сегодня до дня перед следующим основным доходом;
+    free = balance − mandatory_due (None, если следующего основного дохода нет);
+    days_left — дни до следующего основного дохода (сегодня считается, день дохода нет);
+    daily_allowance = free ÷ days_left; None, если дней 0, дохода нет или денег не хватает;
+    status: ok | gap (не хватает) | no_income (нет следующего дохода) | income_today (доход сегодня);
+    note — текст вместо числа для особых случаев, например «Не хватает 5 000 ₽ до 10 ноя».
+    Пример: {"balance": "86000.00", "mandatory_due": "35000.00", "free": "51000.00",
+             "next_income_on": "2026-11-10", "days_left": 13, "daily_allowance": "3923.08", "status": "ok", "note": null}
+    """
+
+    balance: Decimal
+    mandatory_due: Decimal
+    free: Decimal | None
+    next_income_on: date | None
+    days_left: int | None
+    daily_allowance: Decimal | None
+    status: Literal["ok", "gap", "no_income", "income_today"]
+    note: str | None
+
+
 class CyclesResponse(BaseModel):
     ledger_id: int
     currency: str
     mode: CycleMode
     today: date
+    # Что можно тратить сейчас (общий расчёт, как на главной)
+    spending: SpendingPlanResponse
     cycles: list[CycleResponse]
     advice: list[AdviceItem]
 
@@ -2241,6 +2444,8 @@ class FinanceGoalEntryResponse(BaseModel):
     principal_part: Decimal | None
     balance_after: Decimal | None
     note: str | None
+    # Расход, из которого создана запись; None — взнос внесён вручную. Такую запись меняют через расход
+    transaction_id: int | None = None
     can_delete: bool
 
 

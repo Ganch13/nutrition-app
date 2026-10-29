@@ -15,6 +15,8 @@ import type {
   LoadSimulation,
   IncomePrompt,
   FinanceHomeLedger,
+  BalanceSetInput,
+  LedgerBalance,
   Occurrence,
   PeriodSummary,
   RecurringRule,
@@ -44,6 +46,11 @@ import type {
   FinanceSummary,
   FinanceTransaction,
   FinanceTransactionInput,
+  FinanceTransactionChanges,
+  ExpenseSummary,
+  ExpenseSummaryCheck,
+  ExpenseSummaryCheckInput,
+  ExpenseSummaryCreateInput,
   Ledger,
   LedgerCreateInput,
   UserHousehold,
@@ -361,6 +368,36 @@ export function createFinanceTransaction(
   data: FinanceTransactionInput,
 ): Promise<FinanceTransaction> {
   return apiRequest<FinanceTransaction>(`/finance/ledgers/${ledgerId}/transactions`, withBody("POST", data));
+}
+
+/**
+ * PATCH /finance/ledgers/{ledgerId}/transactions/{transactionId}. Меняет операцию; запись в цели меняется вместе с ней.
+ * Пример: { amount: 3000 } или { goal_id: null } (отвязать от цели).
+ */
+export function updateFinanceTransaction(
+  ledgerId: number,
+  transactionId: number,
+  data: FinanceTransactionChanges,
+): Promise<FinanceTransaction> {
+  return apiRequest<FinanceTransaction>(`/finance/ledgers/${ledgerId}/transactions/${transactionId}`, withBody("PATCH", data));
+}
+
+/**
+ * POST /finance/ledgers/{ledgerId}/summaries/check. Сверка сводки с уже записанными расходами, ничего не сохраняет.
+ * Пример: { period_start: "2026-10-19", period_end: "2026-10-25", lines: [{ category_id: 3, amount: 8000 }] }.
+ */
+export function checkExpenseSummary(ledgerId: number, data: ExpenseSummaryCheckInput): Promise<ExpenseSummaryCheck> {
+  return apiRequest<ExpenseSummaryCheck>(`/finance/ledgers/${ledgerId}/summaries/check`, withBody("POST", data));
+}
+
+/** POST /finance/ledgers/{ledgerId}/summaries. Сохраняет сводку; при пересечении без mode сервер ответит 409. */
+export function createExpenseSummary(ledgerId: number, data: ExpenseSummaryCreateInput): Promise<ExpenseSummary> {
+  return apiRequest<ExpenseSummary>(`/finance/ledgers/${ledgerId}/summaries`, withBody("POST", data));
+}
+
+/** DELETE /finance/ledgers/{ledgerId}/summaries/{summaryId}. Удаляет сводку целиком (баланс и цели откатываются). */
+export function deleteExpenseSummary(ledgerId: number, summaryId: number): Promise<void> {
+  return apiRequest<void>(`/finance/ledgers/${ledgerId}/summaries/${summaryId}`, { method: "DELETE" });
 }
 
 /** DELETE /finance/ledgers/{ledgerId}/transactions/{transactionId}. */
@@ -750,6 +787,26 @@ export function getIncomePrompts(): Promise<IncomePrompt[]> {
 /** GET /finance/home. Деньги для главной: по каждой книге сколько всего и сколько свободно в периоде. */
 export function getFinanceHome(): Promise<FinanceHomeLedger[]> {
   return apiRequest<FinanceHomeLedger[]>("/finance/home");
+}
+
+/** GET /finance/ledgers/{id}/balance. Баланс книги («Всего») и последние корректировки. */
+export function getLedgerBalance(ledgerId: number): Promise<LedgerBalance> {
+  return apiRequest<LedgerBalance>(`/finance/ledgers/${ledgerId}/balance`);
+}
+
+/**
+ * POST /finance/ledgers/{id}/balance. Фактический остаток без дохода и расхода: сервер сохраняет разницу
+ * как корректировку. Пример: { actual: 52300 } при «Всего» 50 000 → корректировка +2 300.
+ */
+export function setLedgerBalance(ledgerId: number, data: BalanceSetInput): Promise<LedgerBalance> {
+  return apiRequest<LedgerBalance>(`/finance/ledgers/${ledgerId}/balance`, withBody("POST", data));
+}
+
+/** DELETE /finance/ledgers/{id}/balance/adjustments/{adjustmentId}. Отменяет корректировку, возвращает новый баланс. */
+export function deleteBalanceAdjustment(ledgerId: number, adjustmentId: number): Promise<LedgerBalance> {
+  return apiRequest<LedgerBalance>(`/finance/ledgers/${ledgerId}/balance/adjustments/${adjustmentId}`, {
+    method: "DELETE",
+  });
 }
 
 /** GET /finance/ledgers/{id}/upcoming?days=30. Просроченные и ближайшие выплаты. */

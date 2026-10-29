@@ -227,6 +227,9 @@ export default function GoalCard({
                       </p>
                     )}
                     {entry.note && <p className="text-xs text-slate-500">{entry.note}</p>}
+                    {entry.transaction_id !== null && (
+                      <p className="text-xs text-brand-700">из расхода — изменить или удалить можно в «Операциях»</p>
+                    )}
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
                     <p className="num font-semibold text-slate-900">{money(entry.amount)}</p>

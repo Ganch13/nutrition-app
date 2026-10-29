@@ -4,6 +4,7 @@
   * повторяющиеся доходы и обязательные платежи: /finance/ledgers/{id}/recurring;
   * вопрос «Поступил ли платёж?» по всем книгам: /finance/income-prompts;
   * деньги для главной страницы (всего и свободно в периоде): /finance/home;
+  * баланс книги и корректировки «на счетах на самом деле столько-то»: /finance/ledgers/{id}/balance;
   * ближайшие выплаты и бюджетные циклы: /upcoming, /cycles, /period-summary, переключатель режима;
   * оценка долговой нагрузки: /load и /load/simulate;
   * финансовые цели (накопления, долги, кредиты): /goals.
@@ -19,6 +20,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from database import get_db
+from finance_balance import delete_adjustment, get_balance, set_actual_balance
 from finance_errors import FinancePlanError
 from finance_goals import (
     add_entry,
@@ -54,7 +56,9 @@ from finance_routes import get_access, get_today
 from finance_services import LedgerAccess, list_ledgers, require_manage
 from models import User
 from schemas import (
+    BalanceSet,
     CyclesResponse,
+    LedgerBalanceResponse,
     FinanceTransactionResponse,
     FinanceGoalCreate,
     FinanceGoalDetailResponse,
@@ -115,6 +119,52 @@ def home_endpoint(
 ):
     """Деньги для главной: по каждой книге (личной и семейной) сколько всего и сколько свободно в периоде."""
     return home_overview(db, current_user, today)
+
+
+# ---------------------------------------------------------------------------
+# Баланс книги и корректировки («на счетах на самом деле столько-то»)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/ledgers/{ledger_id}/balance", response_model=LedgerBalanceResponse)
+def balance_endpoint(
+    access: LedgerAccess = Depends(get_access),
+    db: Session = Depends(get_db),
+    today: date = Depends(get_today),
+):
+    """Баланс книги («Всего»: только фактические операции и корректировки) и последние корректировки."""
+    sync_recurring(db, access.ledger.id, today)
+    return get_balance(db, access, today)
+
+
+@router.post("/ledgers/{ledger_id}/balance", response_model=LedgerBalanceResponse, status_code=201)
+def set_balance_endpoint(
+    data: BalanceSet,
+    access: LedgerAccess = Depends(get_access),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    today: date = Depends(get_today),
+):
+    """Фактический остаток без дохода и расхода: сервер сохраняет разницу как корректировку.
+
+    Пример: POST /finance/ledgers/1/balance с телом {"actual": 52300, "note": "сверка с банком"}.
+    Если «Всего» было 50 000, сохраняется +2 300, и в ответе total = 52 300. Совпадает — 422.
+    """
+    # Сначала досписываем автосписания: разница считается от актуального баланса
+    sync_recurring(db, access.ledger.id, today)
+    return set_actual_balance(db, access, current_user, data, today)
+
+
+@router.delete("/ledgers/{ledger_id}/balance/adjustments/{adjustment_id}", response_model=LedgerBalanceResponse)
+def delete_adjustment_endpoint(
+    adjustment_id: int,
+    access: LedgerAccess = Depends(get_access),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    today: date = Depends(get_today),
+):
+    """Отменяет корректировку: «Всего» возвращается к прежней цифре. Ответ — обновлённый баланс."""
+    return delete_adjustment(db, access, current_user, adjustment_id, today)
 
 
 # ---------------------------------------------------------------------------

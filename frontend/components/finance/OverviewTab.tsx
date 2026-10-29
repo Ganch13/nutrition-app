@@ -6,6 +6,7 @@ import { getCycles, getLoad, getPeriodSummary, getUpcoming } from "@/lib/endpoin
 import type { Ledger } from "@/lib/types";
 import { useAsyncData } from "@/lib/use-async-data";
 import CompareCard from "./CompareCard";
+import { useFinanceChanged } from "./IncomePromptDialog";
 import LimitsCard from "./LimitsCard";
 import LoadCard from "./LoadCard";
 import OccurrenceList from "./OccurrenceList";
@@ -21,7 +22,8 @@ import { AdviceList, type FinanceTab } from "./shared";
 export default function OverviewTab({ ledger, goTo }: { ledger: Ledger; goTo: (tab: FinanceTab) => void }) {
   const load = useCallback(async () => {
     const [cycles, upcoming, loadReport, summary] = await Promise.all([
-      getCycles(ledger.id, 0, 3),
+      // Только текущий и следующий период: третий не показывается и в советы не попадает
+      getCycles(ledger.id, 0, 2),
       getUpcoming(ledger.id, 30),
       getLoad(ledger.id),
       getPeriodSummary(ledger.id),
@@ -29,6 +31,8 @@ export default function OverviewTab({ ledger, goTo }: { ledger: Ledger; goTo: (t
     return { cycles, upcoming, loadReport, summary };
   }, [ledger.id, ledger.cycle_mode]);
   const { data, error, reload } = useAsyncData(load);
+  // «Изменить баланс» в карточке периода (и подтверждение дохода) рассылают событие — цифры обновляются
+  useFinanceChanged(reload);
 
   if (error && data === null) return <ErrorBanner message={error} onRetry={reload} />;
   if (data === null) return <Loading />;

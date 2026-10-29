@@ -36,6 +36,7 @@ function goalOptions(goals: FinanceGoal[], currentGoalId: number | null): [strin
  * меняет цель на ту же сумму: у накопления прогресс растёт, у долга и кредита остаток уменьшается.
  * goals приходят со страницы, поэтому только что созданная цель сразу есть в списке.
  * onDone — вызывается после сохранения, чтобы страница обновила список; onCancel — закрыть правку.
+ * framed=false — новая операция без карточки «Новая операция» (например, во всплывающем окне на главной).
  */
 export default function TransactionForm({
   ledgerId,
@@ -45,6 +46,7 @@ export default function TransactionForm({
   transaction,
   onDone,
   onCancel,
+  framed = true,
 }: {
   ledgerId: number;
   categories: FinanceCategory[];
@@ -53,6 +55,7 @@ export default function TransactionForm({
   transaction?: FinanceTransaction;
   onDone: () => void;
   onCancel?: () => void;
+  framed?: boolean;
 }) {
   const editing = transaction !== undefined;
   const [kind, setKind] = useState<FinanceKind>(transaction?.kind ?? "expense");
@@ -160,5 +163,6 @@ export default function TransactionForm({
     </form>
   );
 
-  return editing ? <div className="mt-3 rounded-xl bg-slate-50 p-4">{fields}</div> : <Card title="Новая операция">{fields}</Card>;
+  if (editing) return <div className="mt-3 rounded-xl bg-slate-50 p-4">{fields}</div>;
+  return framed ? <Card title="Новая операция">{fields}</Card> : fields;
 }

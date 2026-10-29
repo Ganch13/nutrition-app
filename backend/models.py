@@ -1646,3 +1646,77 @@ class RefreshToken(Base):
     # Когда токен погашен и почему: "rotated" (заменён новым), "logout", "password", "reuse"
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_reason: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
+
+class PersonalAccessKey(Base):
+    """Личный ключ доступа для быстрого добавления расхода с iPhone (ТЗ 29.10.26(2), часть 2).
+
+    Пользователь создаёт ключ в «Профиль и настройки», вставляет его в быструю команду iPhone, и та
+    отправляет расход одним запросом: Authorization: Bearer lad_Xk3f9Q...
+    Ключ даёт доступ ТОЛЬКО к эндпоинтам /quick/... (см. quick_routes.py) — ни к профилю, ни к остальным финансам.
+
+    Как и refresh-токен, сам ключ в базе не хранится: только SHA-256 (key_hash). Ключ случайный
+    (32 байта), поэтому медленный хеш, как у паролей, не нужен. key_prefix — начало ключа для узнавания
+    в списке, например "lad_Xk3f9Q" (префикс и первые 6 символов случайной части).
+    Отозванный ключ (revoked_at задан) перестаёт работать сразу; строка остаётся для истории.
+    Пример строки: id=1, user_id=1, name="iPhone", key_prefix="lad_Xk3f9Q", last_used_at=2026-10-29 14:05, revoked_at=None.
+    """
+
+    __tablename__ = "personal_access_keys"
+
+    __table_args__ = (Index("ix_personal_access_keys_user", "user_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    # При удалении аккаунта ключи удаляет база (каскад) — значит, они больше не работают
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+
+    # Название, чтобы отличать ключи: "iPhone", "iPad Даши"
+    name: Mapped[str] = mapped_column(String(50), nullable=False)
+
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    key_prefix: Mapped[str] = mapped_column(String(10), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Признак «отозван»: когда и почему ("manual" — кнопкой «Отозвать», "password" — смена пароля)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_reason: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
+
+class QuickAddRequest(Base):
+    """Запомненный запрос быстрого добавления с заголовком Idempotency-Key (защита от двойной отправки).
+
+    Быстрая команда iPhone при плохой связи может отправить один и тот же расход дважды. Если команда
+    передаёт заголовок Idempotency-Key, сервер запоминает пару «ключ доступа + значение заголовка» вместе
+    с созданной операцией. Повтор с тем же значением в течение 10 минут не создаёт второй расход,
+    а возвращает уже созданный (QUICK_IDEMPOTENCY_MINUTES в quick_services.py).
+    Строка сохраняется одной транзакцией с самой операцией; уникальность пары не даёт двум одновременным
+    повторам создать два расхода. Записи старше окна удаляются при следующих запросах этого ключа.
+    Пример: access_key_id=1, idempotency_key="8F2A-...-C1", transaction_id=57.
+    """
+
+    __tablename__ = "quick_add_requests"
+
+    __table_args__ = (
+        UniqueConstraint("access_key_id", "idempotency_key", name="uq_quick_add_requests_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    access_key_id: Mapped[int] = mapped_column(
+        ForeignKey("personal_access_keys.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # Значение заголовка Idempotency-Key, например UUID из быстрой команды
+    idempotency_key: Mapped[str] = mapped_column(String(100), nullable=False)
+
+    # Созданный расход; если его потом удалили, запомненный запрос тоже исчезает (каскад)
+    transaction_id: Mapped[int] = mapped_column(
+        ForeignKey("finance_transactions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

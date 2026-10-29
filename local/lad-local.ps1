@@ -30,7 +30,7 @@ $ErrorActionPreference = "Stop"
 $Here = $PSScriptRoot                                  # ...\nutrition-app\local
 $ComposeFile = Join-Path $Here "docker-compose.yml"
 $EnvFile = Join-Path $Here ".env"
-$Images = @("lad-backend:1.3.0-local", "lad-frontend:1.3.0-local")
+$Images = @("lad-backend:1.4.0-local", "lad-frontend:1.4.0-local")
 
 
 function New-HexSecret([int]$Bytes) {

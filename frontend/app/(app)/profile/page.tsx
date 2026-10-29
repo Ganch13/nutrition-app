@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import AccessKeysCard from "@/components/AccessKeysCard";
 import DeleteAccountCard from "@/components/DeleteAccountCard";
 import {
   Button,
@@ -113,6 +114,15 @@ export default function ProfilePage() {
         <Card title="Личные данные">
           <form onSubmit={handleSubmit} className="space-y-4">
             <TextField label="Имя" value={name} onChange={setName} required maxLength={100} />
+            {/* Почта только для просмотра: смены почты пока нет, это адрес для входа */}
+            <TextField
+              label="Электронная почта"
+              value={profile.email ?? "не указана"}
+              onChange={() => undefined}
+              readOnly
+              className="bg-slate-50 text-slate-600"
+              hint="Адрес для входа. Изменить его пока нельзя."
+            />
             <div className="grid gap-4 sm:grid-cols-2">
               <TextField label="Дата рождения" type="date" value={birthDate} onChange={setBirthDate} />
               <SelectField label="Пол" value={sex} onChange={setSex} options={SEX_OPTIONS} />
@@ -189,6 +199,8 @@ export default function ProfilePage() {
             </Button>
           </form>
         </Card>
+
+        <AccessKeysCard />
 
         <Card title="Приложение на телефоне">
           <div className="space-y-3 text-sm text-slate-600">

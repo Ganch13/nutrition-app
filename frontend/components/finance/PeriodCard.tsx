@@ -1,6 +1,7 @@
 import { Badge, Card } from "@/components/ui";
 import { formatDayMonth, formatMoney, plural } from "@/lib/format";
 import type { Cycle, Ledger, SpendingPlan } from "@/lib/types";
+import { BalanceAdjustButton } from "./BalanceAdjustDialog";
 import CycleStrip from "./CycleStrip";
 import { formatPeriod, Stat } from "./shared";
 
@@ -79,6 +80,20 @@ export function PeriodCard({
           <p className={`figure num mt-1 text-4xl sm:text-5xl ${heroBad ? "text-red-600" : "text-slate-900"}`}>{heroValue}</p>
         )}
         {heroNote && <p className={heroValue === null ? "mt-1 text-base font-medium text-slate-700" : "mt-1 text-sm text-slate-500"}>{heroNote}</p>}
+        {/* Баланс книги и «Изменить баланс» — та же кнопка и то же окно, что на главной */}
+        <div className="mt-3 flex flex-wrap items-center gap-x-2 text-sm text-slate-600">
+          <span>
+            Баланс{" "}
+            <span className={`num font-semibold ${Number(spending.balance) < 0 ? "text-red-600" : "text-slate-900"}`}>
+              {money(spending.balance)}
+            </span>
+          </span>
+          <BalanceAdjustButton
+            ledgerId={ledger.id}
+            title={ledger.kind === "personal" ? "Личные" : `Семья: ${ledger.household_name}`}
+            currency={ledger.currency}
+          />
+        </div>
       </div>
 
       <CycleStrip cycle={cycle} maxAmount={maxAmount} currency={ledger.currency} />

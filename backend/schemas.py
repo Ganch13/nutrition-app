@@ -1,4 +1,5 @@
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     EmailStr,
@@ -93,6 +94,9 @@ class UserResponse(BaseModel):
 
     id: int
     name: str
+    # Адрес входа, например "danya@example.com". Отдаётся только владельцу профиля (все эндпоинты с UserResponse —
+    # свой профиль); в интерфейсе только для просмотра, смены почты пока нет. У старых записей без почты — None
+    email: str | None = None
     age: int | None
     birth_date: date | None
     sex: Sex | None
@@ -112,6 +116,7 @@ class UserResponse(BaseModel):
             field_names = (
                 "id",
                 "name",
+                "email",
                 "age",
                 "birth_date",
                 "sex",
@@ -2521,3 +2526,126 @@ class DeletionPreviewResponse(BaseModel):
     households_to_delete: list[HouseholdBrief]
     households_to_leave: list[HouseholdLeaveInfo]
     counts: dict[str, int]
+
+
+# ---------------------------------------------------------------------------
+# Личные ключи доступа и быстрое добавление расхода с iPhone (ТЗ 29.10.26(2), часть 2)
+# ---------------------------------------------------------------------------
+
+
+class AccessKeyCreate(BaseModel):
+    """Новый личный ключ: {"name": "iPhone"}. Название нужно, чтобы отличать ключи в списке."""
+
+    name: str = Field(min_length=1, max_length=50)
+
+    @field_validator("name")
+    @classmethod
+    def strip_name(cls, value: str) -> str:
+        # "  iPhone " → "iPhone"; из одних пробелов название не получится
+        value = value.strip()
+        if not value:
+            raise ValueError("Название ключа не может быть пустым")
+        return value
+
+
+class AccessKeyResponse(BaseModel):
+    """Ключ в списке (без самого ключа): {"id": 1, "name": "iPhone", "key_prefix": "lad_Xk3f9Q",
+    "created_at": "...", "last_used_at": null, "revoked_at": null, "active": true}."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    # Начало ключа для узнавания: "lad_" и первые 6 символов случайной части
+    key_prefix: str
+    created_at: datetime
+    last_used_at: datetime | None
+    revoked_at: datetime | None
+    active: bool
+
+
+class AccessKeyCreatedResponse(AccessKeyResponse):
+    """Ответ на создание ключа: то же, что в списке, плюс сам ключ — он показывается ОДИН раз."""
+
+    key: str
+
+
+# Книга для быстрого расхода: личная или семейная
+QuickLedgerKind = Literal["personal", "household"]
+
+
+class QuickExpenseCreate(BaseModel):
+    """Быстрый расход с iPhone. Обязательна только сумма. Примеры:
+    {"amount": 350}
+    {"amount": "350,50", "category": "Продукты", "comment": "Пятёрочка"}
+    {"amount": 1200, "category": 4, "date": "2026-10-29", "ledger": "household"}
+
+    category — название (без учёта регистра) или id категории расходов этой книги; если не найдена —
+    «Без категории». date — по умолчанию сегодня в часовом поясе профиля. ledger — "personal" (по умолчанию)
+    или "household"; household_id нужен, только если семей несколько.
+    Сумму проверяет сервис (quick_services), чтобы ответ был понятным: «Сумма должна быть больше нуля».
+    """
+
+    amount: Decimal = Field(max_digits=12, decimal_places=2)
+    category: int | str | None = None
+    comment: str | None = Field(default=None, max_length=250)
+    occurred_on: date | None = Field(default=None, validation_alias=AliasChoices("date", "occurred_on"))
+    ledger: QuickLedgerKind = "personal"
+    household_id: int | None = Field(default=None, gt=0)
+
+    @field_validator("amount", mode="before")
+    @classmethod
+    def accept_comma(cls, value):
+        # Русская раскладка iPhone ставит запятую: "350,50" → "350.50"; пробелы-разделители тысяч убираем
+        if isinstance(value, str):
+            return value.replace("\u00a0", "").replace(" ", "").replace(",", ".")
+        return value
+
+    @field_validator("category", "comment", mode="before")
+    @classmethod
+    def empty_to_none(cls, value):
+        # Пустой ответ в быстрой команде приходит как "" — это то же, что «не указано»
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
+        return value
+
+
+class QuickExpenseResponse(BaseModel):
+    """Короткий ответ для уведомления на iPhone. Пример:
+    {"ok": true, "duplicate": false, "transaction_id": 57, "ledger": "personal", "amount": "350.00",
+     "currency": "RUB", "category": "Продукты", "category_found": true, "occurred_on": "2026-10-29",
+     "balance": "12000.00", "free": "8000.00", "free_until": "2026-11-05", "daily_allowance": "1142.86",
+     "message": "Записано 350 ₽, «Продукты». Баланс 12 000 ₽, свободно 8 000 ₽, в день 1 142,86 ₽."}
+    duplicate=true — это повтор с тем же Idempotency-Key: новый расход не создан, показан прежний.
+    """
+
+    ok: bool
+    duplicate: bool
+    transaction_id: int
+    ledger: QuickLedgerKind
+    amount: Decimal
+    currency: str
+    category: str
+    # False — категорию из запроса не нашли и записали в «Без категории»
+    category_found: bool
+    occurred_on: date
+    balance: Decimal
+    free: Decimal | None
+    free_until: date | None
+    daily_allowance: Decimal | None
+    message: str
+
+
+class QuickCategory(BaseModel):
+    id: int
+    name: str
+
+
+class QuickCategoriesResponse(BaseModel):
+    """Категории расходов книги для меню быстрой команды: names — для «Выбрать из списка».
+    Пример: {"ledger": "personal", "names": ["Продукты", "Транспорт"], "categories": [{"id": 3, "name": "Продукты"}, ...]}"""
+
+    ledger: QuickLedgerKind
+    names: list[str]
+    categories: list[QuickCategory]

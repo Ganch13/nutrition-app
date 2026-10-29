@@ -307,14 +307,15 @@ def update_ledger_endpoint(
 @router.get("/ledgers/{ledger_id}/cycles", response_model=CyclesResponse)
 def cycles_endpoint(
     previous: Annotated[int, Query(ge=0, le=12)] = 0,
-    count: Annotated[int, Query(ge=1, le=12)] = 3,
+    count: Annotated[int, Query(ge=1, le=12)] = 2,
     access: LedgerAccess = Depends(get_access),
     db: Session = Depends(get_db),
     today: date = Depends(get_today),
 ):
     """Текущий бюджетный период, следующие за ним и (по желанию) предыдущие, плюс советы.
 
-    Пример: GET /finance/ledgers/1/cycles?count=3 → текущий и два следующих периода.
+    Пример: GET /finance/ledgers/1/cycles → текущий и следующий период (так их показывает «Обзор»).
+    Советы считаются только по периодам из ответа: что не показано, в советы не попадает.
     """
     sync_recurring(db, access.ledger.id, today)
     return get_cycles(db, access, today, previous, count)

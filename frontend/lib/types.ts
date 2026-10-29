@@ -33,6 +33,8 @@ export type GoalStatus = "active" | "completed" | "paused" | "cancelled";
 export type UserProfile = {
   id: number;
   name: string;
+  // Адрес входа, например "danya@example.com" (только просмотр); null у старых записей без почты
+  email: string | null;
   // Возраст считает backend по birth_date; null, если даты рождения нет
   age: number | null;
   birth_date: string | null;
@@ -1296,3 +1298,22 @@ export type DeletionPreview = {
   // Сколько записей будет стёрто: weight_records, meal_entries, training_sessions, progress_photos, finance_transactions
   counts: Record<string, number>;
 };
+
+/**
+ * Личный ключ доступа для быстрой команды iPhone (GET /access-keys). Самого ключа в списке нет.
+ * Пример: { id: 1, name: "iPhone", key_prefix: "lad_Xk3f9Q", created_at: "2026-10-29T14:00:00Z",
+ *           last_used_at: null, revoked_at: null, active: true }
+ */
+export type AccessKey = {
+  id: number;
+  name: string;
+  // Начало ключа для узнавания: "lad_" и 6 символов
+  key_prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  active: boolean;
+};
+
+/** Ответ POST /access-keys: ключ плюс сам ключ "lad_..." — показывается один раз. */
+export type CreatedAccessKey = AccessKey & { key: string };

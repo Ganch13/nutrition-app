@@ -15,7 +15,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from models import RefreshToken, User
+from models import PersonalAccessKey, RefreshToken, User
 from security import hash_password, verify_password
 
 # Сколько живёт refresh-токен (продлевается при каждом обновлении)
@@ -157,6 +157,9 @@ def revoke_session(db: Session, raw_token: str | None) -> None:
 def change_password(db: Session, user: User, current_password: str, new_password: str) -> str:
     """Меняет пароль, гасит все сессии пользователя на всех устройствах и открывает новую на этом.
 
+    Заодно отзывает все личные ключи доступа (быстрая команда iPhone): если пароль меняют из-за утечки,
+    ключ тоже мог утечь. После смены пароля ключ для iPhone нужно создать заново.
+
     Возвращает refresh-токен для текущего устройства (чтобы человека не выкинуло из приложения).
     Ошибки: WrongPasswordError, SamePasswordError.
     """
@@ -169,6 +172,11 @@ def change_password(db: Session, user: User, current_password: str, new_password
         db.execute(
             update(RefreshToken)
             .where(RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None))
+            .values(revoked_at=_now(), revoked_reason="password")
+        )
+        db.execute(
+            update(PersonalAccessKey)
+            .where(PersonalAccessKey.user_id == user.id, PersonalAccessKey.revoked_at.is_(None))
             .values(revoked_at=_now(), revoked_reason="password")
         )
         db.commit()

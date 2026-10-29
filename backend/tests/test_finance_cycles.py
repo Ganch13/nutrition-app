@@ -188,6 +188,28 @@ def test_cash_gap_is_detected_and_advice_suggests_moving_a_payment(client, today
     assert any(item["code"] == "unbalanced" for item in data["advice"])
 
 
+def test_overview_shows_only_current_and_next_period(client, today):
+    """ТЗ 29.10.26(2), п. 1: по умолчанию два периода (текущий и следующий), третий не попадает и в советы.
+
+    Разрыв во втором периоде всё равно виден, но совет не ссылается на третий период: ни «провести платёж
+    после …», ни «в соседних периодах денег тоже нет» (про непоказанный период ничего не утверждаем).
+    """
+    user = register_and_login(client, "two-cycles@example.com")
+    ledger = personal_ledger(client, user)
+    setup_two_incomes(client, user, ledger, rent_day=15, rent=65000)
+    switch_mode(client, user, ledger, "income")
+
+    data = cycles(client, user, ledger)
+    assert [(c["start"], c["end"]) for c in data["cycles"]] == [
+        ("2026-10-25", "2026-11-09"),
+        ("2026-11-10", "2026-11-24"),
+    ]
+    gap = next(item for item in data["advice"] if item["code"] == "cash_gap")
+    assert "Не хватает 41" in gap["text"]
+    assert "2026-11-25" not in gap["text"] and "25 ноября" not in gap["text"]
+    assert "соседних периодах" not in gap["text"]
+
+
 def test_no_cash_gap_advice_when_everything_fits(client, today):
     user = register_and_login(client, "fits@example.com")
     ledger = personal_ledger(client, user)

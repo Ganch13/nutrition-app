@@ -6,24 +6,25 @@ import { CycleStatusBadge } from "./PeriodCard";
 import { formatPeriod } from "./shared";
 
 /**
- * «Периоды рядом»: текущий и следующие периоды на одинаковой шкале.
+ * «Периоды рядом»: текущий и следующий период на одинаковой шкале.
  * Нужна, чтобы заметить кассовый разрыв заранее: если в одном периоде платежи огромные,
  * а в другом почти нет, это видно по высоте тёмных столбиков.
+ * Показываются только два периода (ТЗ 29.10.26(2), п. 1): даже если сервер прислал больше, лишние отбрасываются.
  */
 export default function CompareCard({ ledger, cycles, maxAmount }: { ledger: Ledger; cycles: Cycle[]; maxAmount: number }) {
-  const labels = ["Текущий", "Следующий", "Потом"];
+  const shown = cycles.slice(0, 2);
 
   return (
     <Card
       title="Периоды рядом"
-      description="Все периоды на одной шкале: чем выше тёмный столбик, тем крупнее платёж. Так видно, какой период тяжелее."
+      description="Текущий и следующий период на одной шкале: чем выше тёмный столбик, тем крупнее платёж. Так видно, какой период тяжелее."
     >
       <ul className="space-y-6">
-        {cycles.map((cycle, index) => (
+        {shown.map((cycle) => (
           <li key={cycle.start}>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="font-medium text-slate-900">
-                {cycle.is_current ? labels[0] : (labels[index] ?? "Потом")}{" "}
+                {cycle.is_current ? "Текущий" : "Следующий"}{" "}
                 <span className="font-normal text-slate-500">{formatPeriod(cycle.start, cycle.end)}</span>
               </p>
               <CycleStatusBadge cycle={cycle} />

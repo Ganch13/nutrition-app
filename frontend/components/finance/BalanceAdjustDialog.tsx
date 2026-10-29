@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { FINANCE_CHANGED_EVENT } from "@/components/finance/IncomePromptDialog";
-import { Button, ErrorBanner, Loading, TextField } from "@/components/ui";
+import { useCallback, useState } from "react";
+import { notifyFinanceChanged } from "@/components/finance/IncomePromptDialog";
+import { Button, Dialog, ErrorBanner, Loading, TextField } from "@/components/ui";
 import { getErrorText } from "@/lib/api";
 import { deleteBalanceAdjustment, getLedgerBalance, setLedgerBalance } from "@/lib/endpoints";
 import { formatDayMonth, formatMoney } from "@/lib/format";
@@ -51,17 +51,6 @@ export default function BalanceAdjustDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const dialogRef = useRef<HTMLDivElement>(null);
-
-  // Фокус в окно и закрытие по Escape
-  useEffect(() => {
-    dialogRef.current?.focus();
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   // Введённая сумма числом; null — поле пустое или там не число. Пример: "52 300,5" → 52300.5
   const actualNumber = actual.trim() === "" ? null : Number(actual.replace(/\s/g, "").replace(",", "."));
@@ -75,7 +64,7 @@ export default function BalanceAdjustDialog({
     setError(null);
     try {
       setFresh(await action());
-      window.dispatchEvent(new Event(FINANCE_CHANGED_EVENT));
+      notifyFinanceChanged();
       return true;
     } catch (err) {
       setError(getErrorText(err));
@@ -104,113 +93,128 @@ export default function BalanceAdjustDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-brand-950/40 sm:items-center sm:p-6" onClick={onClose}>
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="balance-adjust-title"
-        tabIndex={-1}
-        onClick={(event) => event.stopPropagation()}
-        className="max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-white p-5 shadow-xl outline-none sm:rounded-3xl sm:p-6"
-        style={{ paddingBottom: "max(1.25rem, env(safe-area-inset-bottom))" }}
-      >
-        <p className="text-xs font-medium text-slate-500">{title}</p>
-        <h2 id="balance-adjust-title" className="mt-1 font-display text-2xl font-semibold text-slate-900">
-          Изменить баланс
-        </h2>
-        <p className="mt-1 text-sm text-slate-600">
-          Укажите, сколько денег сейчас на самом деле. Разница сохранится как корректировка: доходом или расходом она не
-          считается и в отчёты не попадает.
-        </p>
+    <Dialog title={title} heading="Изменить баланс" onClose={onClose}>
+      <p className="mt-1 text-sm text-slate-600">
+        Укажите, сколько денег сейчас на самом деле. Разница сохранится как корректировка: доходом или расходом она не
+        считается и в отчёты не попадает.
+      </p>
 
-        {loadError && (
-          <div className="mt-4">
-            <ErrorBanner message={loadError} onRetry={reload} />
-          </div>
-        )}
-        {balance === null && !loadError && (
-          <div className="mt-4">
-            <Loading />
-          </div>
-        )}
+      {loadError && (
+        <div className="mt-4">
+          <ErrorBanner message={loadError} onRetry={reload} />
+        </div>
+      )}
+      {balance === null && !loadError && (
+        <div className="mt-4">
+          <Loading />
+        </div>
+      )}
 
-        {balance && (
-          <>
-            <div className="mt-4 rounded-2xl bg-slate-50 px-4 py-3">
-              <p className="text-xs text-slate-500">Сейчас в приложении («Баланс»)</p>
-              <p className="figure num mt-0.5 text-2xl text-slate-900">{formatMoney(balance.total, currency)}</p>
+      {balance && (
+        <>
+          <div className="mt-4 rounded-2xl bg-slate-50 px-4 py-3">
+            <p className="text-xs text-slate-500">Сейчас в приложении («Баланс»)</p>
+            <p className="figure num mt-0.5 text-2xl text-slate-900">{formatMoney(balance.total, currency)}</p>
+          </div>
+
+          {saved && !error && (
+            <p role="status" className="mt-3 text-sm font-medium text-good-700">
+              Сохранено. «Баланс» теперь {formatMoney(balance.total, currency)}.
+            </p>
+          )}
+          {error && (
+            <div className="mt-4">
+              <ErrorBanner message={error} />
             </div>
+          )}
 
-            {saved && !error && (
-              <p role="status" className="mt-3 text-sm font-medium text-good-700">
-                Сохранено. «Баланс» теперь {formatMoney(balance.total, currency)}.
-              </p>
-            )}
-            {error && (
-              <div className="mt-4">
-                <ErrorBanner message={error} />
-              </div>
-            )}
+          <form onSubmit={handleSubmit} className="mt-4 space-y-4">
+            <TextField
+              label="Сколько сейчас на самом деле"
+              type="number"
+              inputMode="decimal"
+              step="0.01"
+              value={actual}
+              onChange={(value) => {
+                setActual(value);
+                setSaved(false);
+              }}
+              hint={
+                delta === null || delta === 0
+                  ? "Можно и отрицательную сумму, если ушли в минус"
+                  : `Корректировка: ${signedMoney(delta, currency)}`
+              }
+              required
+            />
+            <TextField label="Пояснение (необязательно)" value={note} onChange={setNote} maxLength={250} placeholder="Сверка с банком" />
+            <div className="flex flex-wrap gap-3">
+              <Button type="submit" loading={busy} disabled={!valid || delta === 0}>
+                Сохранить
+              </Button>
+              <Button variant="secondary" onClick={onClose} disabled={busy}>
+                Закрыть
+              </Button>
+            </div>
+          </form>
 
-            <form onSubmit={handleSubmit} className="mt-4 space-y-4">
-              <TextField
-                label="Сколько сейчас на самом деле"
-                type="number"
-                inputMode="decimal"
-                step="0.01"
-                value={actual}
-                onChange={(value) => {
-                  setActual(value);
-                  setSaved(false);
-                }}
-                hint={
-                  delta === null || delta === 0
-                    ? "Можно и отрицательную сумму, если ушли в минус"
-                    : `Корректировка: ${signedMoney(delta, currency)}`
-                }
-                required
-              />
-              <TextField label="Пояснение (необязательно)" value={note} onChange={setNote} maxLength={250} placeholder="Сверка с банком" />
-              <div className="flex flex-wrap gap-3">
-                <Button type="submit" loading={busy} disabled={!valid || delta === 0}>
-                  Сохранить
-                </Button>
-                <Button variant="secondary" onClick={onClose} disabled={busy}>
-                  Закрыть
-                </Button>
-              </div>
-            </form>
+          {balance.adjustments.length > 0 && (
+            <div className="mt-6">
+              <p className="text-sm font-medium text-slate-700">Последние корректировки</p>
+              <ul className="mt-2 divide-y divide-slate-100">
+                {balance.adjustments.slice(0, SHOWN_ADJUSTMENTS).map((item) => (
+                  <li key={item.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+                    <div className="min-w-0">
+                      <p className="num font-medium text-slate-900">{signedMoney(item.amount, currency)}</p>
+                      <p className="truncate text-xs text-slate-500">
+                        {formatDayMonth(item.adjusted_on)} · {item.created_by_name}
+                        {item.note && ` · ${item.note}`}
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={busy}
+                      onClick={() => void run(() => deleteBalanceAdjustment(ledgerId, item.id))}
+                    >
+                      Отменить
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </>
+      )}
+    </Dialog>
+  );
+}
 
-            {balance.adjustments.length > 0 && (
-              <div className="mt-6">
-                <p className="text-sm font-medium text-slate-700">Последние корректировки</p>
-                <ul className="mt-2 divide-y divide-slate-100">
-                  {balance.adjustments.slice(0, SHOWN_ADJUSTMENTS).map((item) => (
-                    <li key={item.id} className="flex items-center justify-between gap-3 py-2 text-sm">
-                      <div className="min-w-0">
-                        <p className="num font-medium text-slate-900">{signedMoney(item.amount, currency)}</p>
-                        <p className="truncate text-xs text-slate-500">
-                          {formatDayMonth(item.adjusted_on)} · {item.created_by_name}
-                          {item.note && ` · ${item.note}`}
-                        </p>
-                      </div>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={busy}
-                        onClick={() => void run(() => deleteBalanceAdjustment(ledgerId, item.id))}
-                      >
-                        Отменить
-                      </Button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-    </div>
+/**
+ * Кнопка «Изменить баланс» вместе с окном: одна и та же на главной (в каждом разрезе «Деньги»)
+ * и во «Финансы → Обзор» (в карточке периода выбранной книги), чтобы логика не дублировалась.
+ * Пример: <BalanceAdjustButton ledgerId={1} title="Личные" currency="RUB" /> — кнопка-ссылка;
+ * после сохранения окно рассылает FINANCE_CHANGED_EVENT, и блоки с деньгами перезагружаются.
+ * className — сдвиг кнопки под соседнюю вёрстку (например, "-ml-3").
+ */
+export function BalanceAdjustButton({
+  ledgerId,
+  title,
+  currency,
+  className,
+}: {
+  ledgerId: number;
+  title: string;
+  currency: string;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const close = useCallback(() => setOpen(false), []);
+  return (
+    <>
+      <Button size="sm" variant="ghost" className={className} onClick={() => setOpen(true)}>
+        Изменить баланс
+      </Button>
+      {open && <BalanceAdjustDialog ledgerId={ledgerId} title={title} currency={currency} onClose={close} />}
+    </>
   );
 }

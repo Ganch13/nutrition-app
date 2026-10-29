@@ -3,6 +3,8 @@
 
 import { apiBlob, apiRequest, endSession, storeAccessToken } from "./api";
 import type {
+  AccessKey,
+  CreatedAccessKey,
   CycleMode,
   CyclesReport,
   DeletionPreview,
@@ -819,8 +821,11 @@ export function setCycleMode(ledgerId: number, mode: CycleMode): Promise<Ledger>
   return apiRequest<Ledger>(`/finance/ledgers/${ledgerId}`, withBody("PATCH", { cycle_mode: mode }));
 }
 
-/** GET /finance/ledgers/{id}/cycles?previous=0&count=3. Текущий период, следующие за ним и советы. */
-export function getCycles(ledgerId: number, previous = 0, count = 3): Promise<CyclesReport> {
+/**
+ * GET /finance/ledgers/{id}/cycles?previous=0&count=2. Текущий период, следующий за ним и советы по ним.
+ * Советы сервер считает только по запрошенным периодам, поэтому «Обзор» берёт ровно два.
+ */
+export function getCycles(ledgerId: number, previous = 0, count = 2): Promise<CyclesReport> {
   return apiRequest<CyclesReport>(`/finance/ledgers/${ledgerId}/cycles?previous=${previous}&count=${count}`);
 }
 
@@ -887,3 +892,28 @@ export function deleteFinanceGoalEntry(
     method: "DELETE",
   });
 }
+
+// ---------------------------------------------------------------------------
+// Личные ключи для быстрого добавления расхода с iPhone
+// ---------------------------------------------------------------------------
+
+/** GET /access-keys. Ключи пользователя: сначала действующие, новые выше. */
+export function getAccessKeys(): Promise<AccessKey[]> {
+  return apiRequest<AccessKey[]>("/access-keys");
+}
+
+/** POST /access-keys {"name": "iPhone"}. В ответе поле key — ключ целиком, он показывается один раз. */
+export function createAccessKey(name: string): Promise<CreatedAccessKey> {
+  return apiRequest<CreatedAccessKey>("/access-keys", withBody("POST", { name }));
+}
+
+/** DELETE /access-keys/{id}. Отзывает ключ: быстрая команда с ним сразу перестаёт работать. */
+export function revokeAccessKey(keyId: number): Promise<AccessKey> {
+  return apiRequest<AccessKey>(`/access-keys/${keyId}`, { method: "DELETE" });
+}
+
+/** Путь эндпоинта быстрого расхода (для инструкции в профиле; сам интерфейс его не вызывает). */
+export const QUICK_EXPENSE_PATH = "/quick/expense";
+
+/** Путь списка категорий для меню быстрой команды. */
+export const QUICK_CATEGORIES_PATH = "/quick/categories";

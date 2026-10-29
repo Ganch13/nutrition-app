@@ -91,15 +91,20 @@ export function SuccessNotice({ message }: { message: string }) {
   );
 }
 
-/** Нейтральная или предупреждающая подсказка. tone="warning" — жёлтая, "info" — спокойная синяя. */
+/**
+ * Нейтральная или предупреждающая подсказка. tone="warning" — жёлтая, "info" — спокойная синяя.
+ * onClose — показать справа крестик «Закрыть» (что делать после закрытия, решает вызывающий код).
+ */
 export function Notice({
   tone = "info",
   title,
   children,
+  onClose,
 }: {
   tone?: "info" | "warning";
   title?: string;
   children: ReactNode;
+  onClose?: () => void;
 }) {
   const style =
     tone === "warning"
@@ -108,10 +113,21 @@ export function Notice({
   return (
     <div className={`flex items-start gap-2.5 rounded-xl border px-4 py-3 text-sm ${style}`}>
       <Icon name={tone === "warning" ? "alert" : "info"} size={18} className="mt-0.5 shrink-0" />
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
         {title && <p className="font-semibold">{title}</p>}
         <div className={title ? "mt-0.5" : ""}>{children}</div>
       </div>
+      {onClose && (
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Закрыть"
+          title="Закрыть"
+          className="-my-1.5 -mr-2 inline-flex size-8 shrink-0 items-center justify-center rounded-lg opacity-70 transition hover:bg-black/5 hover:opacity-100"
+        >
+          <Icon name="x" size={16} />
+        </button>
+      )}
     </div>
   );
 }
@@ -506,5 +522,58 @@ export function IconButton({
     >
       <Icon name={icon} size={18} />
     </button>
+  );
+}
+
+/**
+ * Всплывающее окно поверх страницы: на телефоне выезжает снизу, на компьютере стоит по центру.
+ * Закрывается кнопкой в самом окне, клавишей Escape и нажатием на затемнённый фон; фокус сразу переходит в окно.
+ * Пример: <Dialog title="Личные" heading="Новая операция" onClose={close}>форма</Dialog>.
+ * title — мелкая подпись сверху (чья книга), heading — крупный заголовок (по нему окно называют экранные дикторы).
+ * onClose лучше передавать через useCallback: иначе обработчик Escape переподключается на каждой отрисовке.
+ */
+export function Dialog({
+  title,
+  heading,
+  onClose,
+  children,
+}: {
+  title?: string;
+  heading: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const headingId = useId();
+
+  // Фокус в окно и закрытие по Escape
+  useEffect(() => {
+    dialogRef.current?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-brand-950/40 sm:items-center sm:p-6" onClick={onClose}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={headingId}
+        tabIndex={-1}
+        onClick={(event) => event.stopPropagation()}
+        className="max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-white p-5 shadow-xl outline-none sm:rounded-3xl sm:p-6"
+        style={{ paddingBottom: "max(1.25rem, env(safe-area-inset-bottom))" }}
+      >
+        {title && <p className="text-xs font-medium text-slate-500">{title}</p>}
+        <h2 id={headingId} className="mt-1 font-display text-2xl font-semibold text-slate-900">
+          {heading}
+        </h2>
+        {children}
+      </div>
+    </div>
   );
 }

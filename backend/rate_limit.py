@@ -98,6 +98,10 @@ REFRESH_BY_ADDRESS = RateLimiter("обновление сессии", limit=60, 
 PASSWORD_CHANGE_BY_USER = RateLimiter("смена пароля", limit=5, window=15 * 60)
 # Неверные пароли при удалении аккаунта, для одного пользователя
 ACCOUNT_DELETE_BY_USER = RateLimiter("удаление аккаунта", limit=5, window=15 * 60)
+# Быстрое добавление с iPhone: запросы по одному личному ключу (ключ — id ключа в базе, не сам ключ)
+QUICK_BY_KEY = RateLimiter("быстрое добавление (ключ)", limit=30, window=60)
+# Быстрое добавление с одного адреса, считая и запросы с неверным ключом: защита от перебора ключей
+QUICK_BY_ADDRESS = RateLimiter("быстрое добавление (адрес)", limit=60, window=60)
 
 ALL_LIMITERS = (
     LOGIN_BY_ACCOUNT,
@@ -106,6 +110,8 @@ ALL_LIMITERS = (
     REFRESH_BY_ADDRESS,
     PASSWORD_CHANGE_BY_USER,
     ACCOUNT_DELETE_BY_USER,
+    QUICK_BY_KEY,
+    QUICK_BY_ADDRESS,
 )
 
 

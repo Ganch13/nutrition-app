@@ -384,7 +384,8 @@ def cycle_advice(
                     f" Если провести платёж «{item['rule_name']}» после {short_date(following['start'])}, "
                     f"нехватка сократится до {money(new_shortage, currency)}."
                 )
-        elif following is None or following["free_after_mandatory"] <= 0:
+        elif following is not None and following["free_after_mandatory"] <= 0:
+            # Без следующего периода в ответе (он не показан) о соседях ничего не утверждаем
             text += (
                 " В соседних периодах свободных денег тоже нет: нужно уменьшить обязательные платежи "
                 "или увеличить доход."

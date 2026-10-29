@@ -69,6 +69,34 @@ const MORE_GROUPS = NAV_GROUPS.map((group) => ({
   items: group.items.filter((item) => !item.primary),
 })).filter((group) => group.items.length > 0);
 
+// Ключ localStorage, где запоминается закрытое уведомление о часовом поясе
+const ZONE_NOTICE_KEY = "lad:zone-notice-dismissed";
+
+/**
+ * Для какого часового пояса устройства уведомление «пояс профиля отличается» уже закрыто.
+ * В localStorage лежит {"deviceZone": "Europe/Berlin"}; вернёт "Europe/Berlin" или null (не закрывали,
+ * хранилище недоступно, запись испорчена). Уведомление скрыто, только пока пояс устройства тот же:
+ * переехали в другой пояс — оно появится снова.
+ */
+function readDismissedZone(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(ZONE_NOTICE_KEY) ?? "null");
+    return typeof saved?.deviceZone === "string" ? saved.deviceZone : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Запоминает, что уведомление закрыто для пояса устройства deviceZone (например "Europe/Berlin"). */
+function saveDismissedZone(deviceZone: string): void {
+  try {
+    window.localStorage.setItem(ZONE_NOTICE_KEY, JSON.stringify({ deviceZone }));
+  } catch {
+    // Хранилище недоступно (частный режим): уведомление скроется только до перезагрузки страницы
+  }
+}
+
 /** Пункт активен, если адрес страницы совпадает с ним: "/nutrition" для "/nutrition". */
 function isActive(pathname: string, href: string): boolean {
   // "/family" не должен считаться открытым на странице "/family-menu", поэтому сравниваем целыми сегментами
@@ -86,6 +114,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const { data: profile, error, reload } = useAsyncData(getProfile);
   // Открыта ли панель «Ещё» в нижнем меню телефона
   const [moreOpen, setMoreOpen] = useState(false);
+  // Пояс устройства, для которого закрыто уведомление о часовом поясе (из localStorage)
+  const [dismissedZone, setDismissedZone] = useState<string | null>(readDismissedZone);
 
   // Escape закрывает панель «Ещё»
   useEffect(() => {
@@ -124,7 +154,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   // Часовой пояс устройства, например "Europe/Berlin"
   const deviceZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const zoneMismatch = profile.timezone !== deviceZone;
+  // Пояса различаются, и для этого пояса устройства уведомление ещё не закрывали
+  const showZoneNotice = profile.timezone !== deviceZone && dismissedZone !== deviceZone;
   const initial = profile.name.trim().charAt(0).toUpperCase() || "?";
 
   return (
@@ -199,9 +230,15 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
         <div className="md:pl-64">
           <main className="mx-auto w-full max-w-6xl px-4 pb-28 pt-5 sm:px-6 md:px-10 md:pb-12 md:pt-9">
-            {zoneMismatch && (
+            {showZoneNotice && (
               <div className="mb-6">
-                <Notice tone="warning">
+                <Notice
+                  tone="warning"
+                  onClose={() => {
+                    saveDismissedZone(deviceZone);
+                    setDismissedZone(deviceZone);
+                  }}
+                >
                   Часовой пояс профиля ({profile.timezone}) отличается от часового пояса устройства ({deviceZone}).
                   Итоги питания считаются по поясу профиля.{" "}
                   <Link href="/profile" className="font-medium underline underline-offset-2">

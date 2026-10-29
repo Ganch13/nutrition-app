@@ -27,7 +27,7 @@ from finance_services import (
     get_category,
     transaction_to_dict,
 )
-from models import FinanceExpenseSummary, FinanceRecurringOccurrence, FinanceTransaction, User
+from models import FinanceCategory, FinanceExpenseSummary, FinanceRecurringOccurrence, FinanceTransaction, User
 from schemas import FinanceTransactionCreate, FinanceTransactionUpdate
 
 
@@ -51,18 +51,21 @@ def _response(db: Session, transaction: FinanceTransaction, category, author_nam
     return transaction_to_dict(transaction, category.name, category.kind, author_name, goal, summary)
 
 
-def create_transaction(
+def add_transaction(
     db: Session,
     access: LedgerAccess,
     user: User,
     data: FinanceTransactionCreate,
     today: date,
-) -> dict:
-    """Добавляет операцию (доступно любому участнику книги); с goal_id — ещё и запись в цели.
+) -> tuple[FinanceTransaction, FinanceCategory]:
+    """Общая часть добавления операции БЕЗ commit: проверки, сама операция и запись в цели.
 
-    Пример: {"category_id": 9, "amount": 5000, "occurred_on": "2026-10-28", "goal_id": 3}
-    → операция 5 000 ₽ и запись в цели «Отпуск» на 5 000 ₽ от 28 октября.
-    Цель только у расхода (иначе 422) и только из этой же книги (иначе 404).
+    Ей пользуются обычная форма (create_transaction) и быстрое добавление с iPhone (quick_services),
+    поэтому расход из быстрой команды попадает в баланс, цели и период точно так же, как введённый вручную.
+    Сохраняет (commit) вызывающий код: быстрое добавление кладёт в ту же транзакцию отметку Idempotency-Key.
+    При ошибке (FinancePlanError, ошибка базы) вызывающий код обязан сделать rollback.
+    Пример: data = {"category_id": 3, "amount": 350, "occurred_on": "2026-10-29"} →
+    (FinanceTransaction(id=57, amount=350, ...), FinanceCategory(name="Продукты", kind="expense")).
     """
     category = get_category(db, access, data.category_id)
     if data.goal_id is not None and category.kind != "expense":
@@ -76,11 +79,28 @@ def create_transaction(
         description=data.description,
         created_by_user_id=user.id,
     )
+    db.add(transaction)
+    db.flush()  # нужен transaction.id для записи в цели
+    if data.goal_id is not None:
+        link_expense(db, access, data.goal_id, transaction, today)
+    return transaction, category
+
+
+def create_transaction(
+    db: Session,
+    access: LedgerAccess,
+    user: User,
+    data: FinanceTransactionCreate,
+    today: date,
+) -> dict:
+    """Добавляет операцию (доступно любому участнику книги); с goal_id — ещё и запись в цели.
+
+    Пример: {"category_id": 9, "amount": 5000, "occurred_on": "2026-10-28", "goal_id": 3}
+    → операция 5 000 ₽ и запись в цели «Отпуск» на 5 000 ₽ от 28 октября.
+    Цель только у расхода (иначе 422) и только из этой же книги (иначе 404).
+    """
     try:
-        db.add(transaction)
-        db.flush()  # нужен transaction.id для записи в цели
-        if data.goal_id is not None:
-            link_expense(db, access, data.goal_id, transaction, today)
+        transaction, category = add_transaction(db, access, user, data, today)
         db.commit()
         db.refresh(transaction)
     except (FinancePlanError, SQLAlchemyError):
@@ -168,4 +188,4 @@ def delete_transaction(db: Session, access: LedgerAccess, user: User, transactio
         raise
 
 
-__all__ = ["create_transaction", "delete_transaction", "update_transaction"]
+__all__ = ["add_transaction", "create_transaction", "delete_transaction", "update_transaction"]

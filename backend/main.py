@@ -34,6 +34,7 @@ from meal_plan_routes import router as meal_plan_router, register_error_handlers
 from shopping_routes import router as shopping_router
 from photo_routes import router as photo_router, register_error_handlers as register_photo_errors
 from family_plan_routes import router as family_plan_router, register_error_handlers as register_family_plan_errors
+from quick_routes import keys_router as access_keys_router, router as quick_router, register_error_handlers as register_quick_errors
 from schemas import HouseholdMemberDetailResponse
 
 
@@ -47,7 +48,7 @@ validate_settings()
 _docs_on = docs_enabled()
 app = FastAPI(
     title="Nutrition & Training Planner API",
-    version="1.3.0",
+    version="1.4.0",
     docs_url="/docs" if _docs_on else None,
     redoc_url="/redoc" if _docs_on else None,
     openapi_url="/openapi.json" if _docs_on else None,
@@ -92,6 +93,9 @@ app.include_router(meal_plan_router)
 app.include_router(shopping_router)
 app.include_router(family_plan_router)
 app.include_router(photo_router)
+# Личные ключи (/access-keys, по обычному входу) и быстрое добавление расхода с iPhone (/quick, по ключу)
+app.include_router(access_keys_router)
+app.include_router(quick_router)
 register_error_handlers(app)
 register_finance_plan_errors(app)
 register_schedule_errors(app)
@@ -101,6 +105,7 @@ register_recipe_errors(app)
 register_meal_plan_errors(app)
 register_family_plan_errors(app)
 register_photo_errors(app)
+register_quick_errors(app)
 
 
 

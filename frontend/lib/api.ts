@@ -7,6 +7,17 @@ if (!API_URL) {
   throw new Error("Не задан NEXT_PUBLIC_API_URL в .env.local");
 }
 
+/**
+ * Полный адрес эндпоинта для показа человеку (например, в инструкции для быстрой команды iPhone).
+ * NEXT_PUBLIC_API_URL на сервере относительный ("/api"), поэтому дополняем его адресом сайта:
+ *   на https://lad.example.ru: absoluteApiUrl("/quick/expense") → "https://lad.example.ru/api/quick/expense";
+ *   локально (API_URL = "http://localhost:8100") → "http://localhost:8100/quick/expense".
+ * Вызывать только в браузере (нужен window.location).
+ */
+export function absoluteApiUrl(path: string): string {
+  return new URL(`${API_URL}${path}`, window.location.origin).href;
+}
+
 /** Ошибка запроса к API. Кроме текста хранит HTTP-код (0 — сервер недоступен). */
 export class ApiError extends Error {
   status: number;

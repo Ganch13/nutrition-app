@@ -44,3 +44,15 @@ def test_get_me_returns_data_of_token_owner(client):
     # alice_response.json()["name"] → "Alice", bob_response.json()["name"] → "Bob"
     assert alice_response.json()["name"] == "Alice"
     assert bob_response.json()["name"] == "Bob"
+
+def test_profile_shows_own_email(client):
+    """ТЗ 29.10.26(2), п. 6: профиль (GET /users/me и GET /users/{id}) отдаёт email владельца для показа в настройках."""
+    user = register_and_login(client, "Mail.Owner@Example.com")
+
+    me = client.get("/users/me", headers=user["headers"])
+    assert me.status_code == 200
+    # Почта хранится в нижнем регистре (как при входе)
+    assert me.json()["email"] == "mail.owner@example.com"
+
+    by_id = client.get(f"/users/{user['id']}", headers=user["headers"])
+    assert by_id.json()["email"] == "mail.owner@example.com"

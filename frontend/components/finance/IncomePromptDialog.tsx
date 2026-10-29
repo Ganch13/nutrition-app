@@ -18,8 +18,27 @@ const LATER_MS = 3 * 60 * 60 * 1000;
 // Как часто перепроверять ожидаемые поступления, пока приложение открыто
 const RECHECK_MS = 30 * 60 * 1000;
 
-/** Событие окна: финансы изменились (поступление подтверждено). Главная и разделы могут обновиться. */
+/**
+ * Событие окна: финансы изменились (поступление подтверждено, баланс исправлен, добавлена операция).
+ * Главная и разделы могут обновиться.
+ */
 export const FINANCE_CHANGED_EVENT = "lad:finance-changed";
+
+/** Сообщает всем блокам на странице, что деньги изменились (они перезагрузят свои цифры). */
+export function notifyFinanceChanged(): void {
+  window.dispatchEvent(new Event(FINANCE_CHANGED_EVENT));
+}
+
+/**
+ * Перезагружает блок, когда в другом месте изменились деньги (FINANCE_CHANGED_EVENT).
+ * Пример: useFinanceChanged(reload) в «Финансы → Обзор» — после «Изменить баланс» цифры периода обновятся сами.
+ */
+export function useFinanceChanged(reload: () => void): void {
+  useEffect(() => {
+    window.addEventListener(FINANCE_CHANGED_EVENT, reload);
+    return () => window.removeEventListener(FINANCE_CHANGED_EVENT, reload);
+  }, [reload]);
+}
 
 /** Ключ поступления: книга, правило и плановая дата. */
 function promptKey(item: IncomePrompt): string {

@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import BalanceAdjustDialog from "@/components/finance/BalanceAdjustDialog";
-import { FINANCE_CHANGED_EVENT } from "@/components/finance/IncomePromptDialog";
+import { useCallback, type ReactNode } from "react";
+import { BalanceAdjustButton } from "@/components/finance/BalanceAdjustDialog";
+import { useFinanceChanged } from "@/components/finance/IncomePromptDialog";
+import { TransactionButton } from "@/components/finance/TransactionDialog";
 import { Badge, Button, Card, EmptyState, ErrorBanner, Loading, ProgressBar } from "@/components/ui";
 import {
   getDailySummary,
@@ -144,18 +145,10 @@ export default function DashboardPage() {
   );
 }
 
-/** Обновляет блок, когда в другом месте подтвердили поступление денег. */
-function useFinanceChanged(reload: () => void) {
-  useEffect(() => {
-    window.addEventListener(FINANCE_CHANGED_EVENT, reload);
-    return () => window.removeEventListener(FINANCE_CHANGED_EVENT, reload);
-  }, [reload]);
-}
-
 /**
  * Деньги: личный и семейный разрезы независимо. В каждом — сколько денег всего и сколько свободно
  * в текущем бюджетном периоде. Личные деньги в семейный разрез не входят. Если пользователь не в семье,
- * семейного разреза нет.
+ * семейного разреза нет. Разрезы стоят друг под другом, а не рядом, чтобы семейный не сжимал цифры личного.
  */
 function MoneyBlock({ onHide }: { onHide: () => void }) {
   const load = useCallback(async () => {
@@ -174,7 +167,9 @@ function MoneyBlock({ onHide }: { onHide: () => void }) {
       {error && <ErrorBanner message={error} onRetry={reload} />}
       {data === null && !error && <Loading />}
       {data && (
-        <div className={`grid gap-4 ${families.length > 0 ? "sm:grid-cols-2" : ""}`}>
+        // Разрезы всегда друг под другом (сначала «Личные», ниже семьи): ширина и размер цифр
+        // в разрезе не зависят от того, есть ли семья
+        <div className="space-y-4">
           <MoneySlice title="Личные" item={personal} />
           {families.map((household) => (
             <MoneySlice
@@ -194,10 +189,10 @@ function MoneyBlock({ onHide }: { onHide: () => void }) {
  * «Баланс» — кошелёк: только фактические операции и корректировки. «Свободно» = баланс − обязательные платежи
  * до следующего основного дохода (общий расчёт сервера, тот же, что во «Финансы → Обзор»).
  * Кнопка «Изменить баланс» открывает окно, где можно ввести фактический остаток без дохода и расхода.
+ * Кнопка «Внести расход/доход» открывает форму операции этой книги во всплывающем окне; после сохранения
+ * цифры блока перезагружаются (FINANCE_CHANGED_EVENT).
  */
 function MoneySlice({ title, item }: { title: string; item: FinanceHomeLedger | null }) {
-  const [adjusting, setAdjusting] = useState(false);
-  const closeDialog = useCallback(() => setAdjusting(false), []);
   return (
     <div className="rounded-xl bg-slate-50 p-4">
       <p className="text-sm font-medium text-slate-700">{title}</p>
@@ -227,15 +222,11 @@ function MoneySlice({ title, item }: { title: string; item: FinanceHomeLedger | 
               {item.spending_status === "gap" && <p className="mt-0.5 text-xs text-red-600">{item.spending_note}</p>}
             </div>
           )}
-          <div className="col-span-2 -ml-3 -mb-2">
-            <Button size="sm" variant="ghost" onClick={() => setAdjusting(true)}>
-              Изменить баланс
-            </Button>
+          <div className="col-span-2 flex flex-wrap items-center gap-2 pt-1">
+            <TransactionButton ledgerId={item.ledger_id} title={title} />
+            <BalanceAdjustButton ledgerId={item.ledger_id} title={title} currency={item.currency} />
           </div>
         </div>
-      )}
-      {adjusting && item && (
-        <BalanceAdjustDialog ledgerId={item.ledger_id} title={title} currency={item.currency} onClose={closeDialog} />
       )}
     </div>
   );
